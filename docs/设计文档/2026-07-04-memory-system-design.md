@@ -196,6 +196,10 @@ COMMIT
    SELECT seq, correction_count FROM entries
    WHERE deleted=0 AND (consolidated_seq IS NULL OR correction_count > 0)
    → captured_seqs  (seq, orig_correction_count)
+   同时捕获已删除修正记录的快照:
+   SELECT seq, correction_count FROM entries
+   WHERE deleted=1 AND correction_count > 0
+   → captured_deleted_seqs (seq, orig_del_correction_count)
 3. 如空 → 退出
 4. 备份: mkdir -p .backup; [ -f project-context.md ] && cp project-context.md .backup/v{V-1}.bak || true
 5. LLM 输入:
@@ -208,7 +212,7 @@ COMMIT
    (c) 已删除修正记录（让 LLM 感知被删除的内容）:
        SELECT seq, content, type, topics,
          'user_deletion' AS correction_status
-       FROM entries WHERE deleted=1 AND correction_count > 0
+       FROM entries WHERE seq IN (captured_deleted_seqs)
 6. LLM 全量生成 project-context.md:
    - user_correction: 优先采纳修正版本
    - user_deletion: 从摘要中移除对应内容
@@ -223,8 +227,8 @@ COMMIT
      WHERE seq IN (captured_seqs) AND correction_count = orig_correction_count
      -- 条件过滤: 快照值 ≠ 当前值 → 并发修正在此期间发生过 → 跳过，下次捕获
      UPDATE entries SET correction_count=0
-     WHERE deleted=1 AND correction_count>0
-     AND consolidated_seq = V  -- 仅重置本次 evolve 处理的条目，不触及并发写入
+     WHERE seq IN (captured_deleted_seqs) AND correction_count = orig_del_correction_count
+     -- 对称快照: 并发删除的条目 correction_count 与快照不同 → 跳过 → 下次 evolve 捕获
      UPSERT system VALUES('evolve_seq', V, datetime('now'))
      UPDATE system SET value=CAST(value AS INTEGER)+1 WHERE key='total_evolves'
    COMMIT
