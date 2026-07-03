@@ -92,6 +92,7 @@ CREATE TABLE system (
 **config.toml：**
 ```toml
 [evolve]
+auto_evolve_enabled = true    # add 自动触发开关
 suggest_threshold = 10
 auto_evolve_threshold = 20     # add 自动触发阈值，达到后同步执行 evolve
 [load]
@@ -126,6 +127,7 @@ project-context.md 文件不存在? → 跳过（首次兼容）。
 ### add
 
 ```
+参数: --type TYPE --content "..." [--topics] [--no-evolve]
 sha256 = SHA256(content + type + topics)
 BEGIN
   SELECT seq FROM entries WHERE sha256=? AND deleted=0
@@ -133,12 +135,12 @@ BEGIN
   INSERT INTO entries(type, content, topics, sha256) VALUES (...)
 COMMIT
 UPDATE system SET value=CAST(value AS INTEGER)+1 WHERE key='total_adds'
-  -- 自动触发: 写入后检查未合并数，达到阈值直接 evolve
-  -- 不走 load（避免阻塞 session），不走 agent 判断（避免遗忘）
-  unmerged = SELECT count(*) FROM entries
-             WHERE deleted=0 AND (consolidated_seq IS NULL OR correction_count > 0)
-  IF unmerged >= auto_evolve_threshold:
-      evolve()  ← 同步执行，用户等写入+进化一起完成
+  -- 自动触发（默认开启，--no-evolve 可跳过）:
+  IF auto_evolve_enabled AND NOT no_evolve:
+      unmerged = SELECT count(*) FROM entries
+                 WHERE deleted=0 AND (consolidated_seq IS NULL OR correction_count > 0)
+      IF unmerged >= auto_evolve_threshold:
+          evolve()
 异步: vec → INSERT OR REPLACE entries_vec
 ```
 
@@ -210,7 +212,10 @@ COMMIT
 6. LLM 全量生成 project-context.md:
    - user_correction: 优先采纳修正版本
    - user_deletion: 从摘要中移除对应内容
-   - 标记矛盾 ⚠️ + 偏好 💡
+   - 标记矛盾: LLM 判断同 topic 内容冲突 → ⚠️
+   - 偏好检测: type=preference 同语义 ≥3 次跨 session → 💡
+     → evolve 输出到 stdout: "💡 建议更新 profile.md: {内容}"
+     → Agent 展示给用户确认后执行: echo "新偏好" >> profile.md
    - 嵌入版本注释: <!-- evolve_seq: V -->
 7. 写临时文件（不 rename）
 8. BEGIN
@@ -282,7 +287,7 @@ add → evolve → entries 标记 consolidated_seq=V
 | 写入崩溃 | WAL rollback |
 | evolve 期间新记录插入 | captured_seqs 冻结 → 不误标记 |
 | evolve 文件-DB 不一致 | rename 在 COMMIT 后 → version 注释 stale 检测 |
-| 两 session 同时 evolve | 重叠处理（v1 接受，加 fcntl.flock 后可解） |
+| 两 session 同时 evolve | evolve 全程 acquire fcntl.flock(.lock) → 串行化 |
 | 向量失败 | 不阻塞 entries |
 | 首次 evolve 无文件 | [ -f ] 检查跳过备份 |
 
