@@ -93,7 +93,7 @@ CREATE TABLE system (
 ```toml
 [evolve]
 suggest_threshold = 10
-auto_evolve_threshold = 20     # v1 仅提示，不自动执行
+auto_evolve_threshold = 20     # add 自动触发阈值，达到后同步执行 evolve
 [load]
 max_tokens = 3000
 recent_entries = 10
@@ -118,8 +118,9 @@ project-context.md 文件不存在? → 跳过（首次兼容）。
   如 N < system.evolve_seq → 输出"⚠️ 项目文件过期，建议 memory evolve"
   文件经过手工编辑丢失注释 → 跳过版本校验
 
-自动触发（仅提示，不自动执行）:
-  未合并数 ≥ suggest_threshold → "⚠️ N 条未合并 → 运行 memory evolve"
+自动触发（辅助提示，主路径走 add 自动触发）:
+  未合并数 ≥ suggest_threshold → "⚠️ N 条未合并，运行 memory evolve"
+  未合并数 ≥ auto_evolve_threshold × 2 → "⚠️ 未合并数已达 {N}，建议运行 memory evolve"
 ```
 
 ### add
@@ -132,6 +133,12 @@ BEGIN
   INSERT INTO entries(type, content, topics, sha256) VALUES (...)
 COMMIT
 UPDATE system SET value=CAST(value AS INTEGER)+1 WHERE key='total_adds'
+  -- 自动触发: 写入后检查未合并数，达到阈值直接 evolve
+  -- 不走 load（避免阻塞 session），不走 agent 判断（避免遗忘）
+  unmerged = SELECT count(*) FROM entries
+             WHERE deleted=0 AND (consolidated_seq IS NULL OR correction_count > 0)
+  IF unmerged >= auto_evolve_threshold:
+      evolve()  ← 同步执行，用户等写入+进化一起完成
 异步: vec → INSERT OR REPLACE entries_vec
 ```
 
