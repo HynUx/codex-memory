@@ -149,3 +149,7 @@ evolve step 5 用 `CASE WHEN correction_count > 0 THEN 'user_correction' ELSE 'n
 F2 传导闭环: ✅ 四项验证全部通过
 修复: evolve step 4 备份语法错误 + step 5(b) AND deleted=0
 需求满足: R1-R16 全部 ✅
+
+### 2026-07-04 — F1 删除路径修复确认 → ✅ 通过
+审查者: Parfit (DeepSeek-V4-Pro, high-effort)
+结果: ✅ 通过。所有致命问题全部修复，设计可进入实施。
