@@ -192,10 +192,10 @@ COMMIT
 
 ```
 1. 读 system.evolve_seq → V; V = V + 1
-2. 捕获未合并记录 + 已修正记录:
-   SELECT seq FROM entries
+2. 捕获未合并记录 + 已修正记录，同时记录 correction_count 快照:
+   SELECT seq, correction_count FROM entries
    WHERE deleted=0 AND (consolidated_seq IS NULL OR correction_count > 0)
-   → captured_seqs
+   → captured_seqs  (seq, orig_correction_count)
 3. 如空 → 退出
 4. 备份: mkdir -p .backup; [ -f project-context.md ] && cp project-context.md .backup/v{V-1}.bak || true
 5. LLM 输入:
@@ -220,8 +220,11 @@ COMMIT
 7. 写临时文件（不 rename）
 8. BEGIN
      UPDATE entries SET consolidated_seq=V, correction_count=0
-     WHERE seq IN (captured_seqs)
-     UPDATE entries SET correction_count=0 WHERE deleted=1 AND correction_count>0
+     WHERE seq IN (captured_seqs) AND correction_count = orig_correction_count
+     -- 条件过滤: 快照值 ≠ 当前值 → 并发修正在此期间发生过 → 跳过，下次捕获
+     UPDATE entries SET correction_count=0
+     WHERE deleted=1 AND correction_count>0
+     AND consolidated_seq = V  -- 仅重置本次 evolve 处理的条目，不触及并发写入
      UPSERT system VALUES('evolve_seq', V, datetime('now'))
      UPDATE system SET value=CAST(value AS INTEGER)+1 WHERE key='total_evolves'
    COMMIT
