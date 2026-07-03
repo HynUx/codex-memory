@@ -188,14 +188,14 @@ COMMIT
    WHERE deleted=0 AND (consolidated_seq IS NULL OR correction_count > 0)
    → captured_seqs
 3. 如空 → 退出
-4. 备份: [ -f project-context.md ] && cp .backup/v{V-1}.bak || true
+4. 备份: mkdir -p .backup; [ -f project-context.md ] && cp project-context.md .backup/v{V-1}.bak || true
 5. LLM 输入:
    (a) 已有 project-context.md（文件存在时）
    (b) 未合并 + 已修正记录:
        SELECT seq, content, type, topics,
          CASE WHEN e.correction_count > 0 THEN 'user_correction'
               ELSE 'new' END AS correction_status
-       FROM entries e WHERE seq IN (captured_seqs)
+       FROM entries e WHERE seq IN (captured_seqs) AND e.deleted=0
    (c) 已删除修正记录（让 LLM 感知被删除的内容）:
        SELECT seq, content, type, topics,
          'user_deletion' AS correction_status

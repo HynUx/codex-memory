@@ -143,3 +143,9 @@ evolve step 5 用 `CASE WHEN correction_count > 0 THEN 'user_correction' ELSE 'n
 - UNIQUE 索引改为 partial index WHERE deleted=0
 - rollback 修复备份命名冲突
 状态: F2 已修复，待下一轮审查确认
+
+### 2026-07-04 08:10 — 第 6 轮审查（Lovelace）
+结果: 条件通过
+F2 传导闭环: ✅ 四项验证全部通过
+修复: evolve step 4 备份语法错误 + step 5(b) AND deleted=0
+需求满足: R1-R16 全部 ✅
