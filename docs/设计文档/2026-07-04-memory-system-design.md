@@ -66,7 +66,7 @@ CREATE TABLE entries (
 
 CREATE INDEX idx_entries_type    ON entries(type, deleted);
 CREATE INDEX idx_entries_created ON entries(created);
-CREATE UNIQUE INDEX idx_entries_sha256 ON entries(sha256, deleted);
+CREATE UNIQUE INDEX idx_entries_sha256 ON entries(sha256) WHERE deleted = 0;
 CREATE INDEX idx_entries_deleted ON entries(deleted, consolidated_seq);
 
 CREATE VIRTUAL TABLE entries_fts USING fts5(
@@ -159,7 +159,7 @@ BEGIN
   SELECT seq, consolidated_seq FROM entries WHERE seq=? AND deleted=0
   UPDATE entries SET deleted=1 WHERE seq=?
   IF consolidated_seq IS NOT NULL:  ← 已合并记录被修正
-      UPDATE entries SET consolidated_seq=NULL WHERE seq=?
+      UPDATE entries SET correction_count = correction_count + 1 WHERE seq=?
       UPDATE system SET value=CAST(value AS INTEGER)+1 WHERE key='total_corrections'
 COMMIT
 异步: DELETE FROM entries_vec WHERE seq=?
@@ -175,7 +175,7 @@ BEGIN
   IF 碰撞: ROLLBACK; 输出 "冲突"
   UPDATE entries SET content=?, type=?, topics=?, sha256=? WHERE seq=?
   IF consolidated_seq IS NOT NULL:
-      UPDATE entries SET consolidated_seq=NULL WHERE seq=?
+      UPDATE entries SET correction_count = correction_count + 1 WHERE seq=?
       UPDATE system SET value=CAST(value AS INTEGER)+1 WHERE key='total_corrections'
 COMMIT
 异步: DELETE FROM entries_vec WHERE seq=? → ONNX → INSERT OR REPLACE
@@ -187,7 +187,7 @@ COMMIT
 1. SELECT value FROM system WHERE key='evolve_seq' → V
    V = int(V) + 1
 2. 捕获 captured_seqs:
-   SELECT seq FROM entries WHERE deleted=0 AND consolidated_seq IS NULL
+   SELECT seq FROM entries WHERE deleted=0 AND consolidated_seq IS NULL AND correction_count = 0
 3. 如空 → 退出
 4. cp project-context.md → .backup/v{V-1}.bak
 5. 构建 LLM 输入:
@@ -196,9 +196,8 @@ COMMIT
      SELECT seq, content, type, topics,
        CASE WHEN EXISTS(
          SELECT 1 FROM entries AS e2
-         WHERE e2.consolidated_seq IS NOT NULL AND e2.seq = e.seq
-       ) THEN 'user_correction'
-       ELSE 'new' END AS correction_status
+         -- e2.consolidated_seq  e2.seq = e.seq
+       CASE WHEN e.correction_count > 0 THEN 'user_correction' ELSE 'new' END AS correction_status
      FROM entries e WHERE seq IN (captured_seqs)
 6. LLM 生成全量 project-context.md:
    - For records marked user_correction: 优先采纳修正版本
@@ -224,8 +223,8 @@ COMMIT
   1. 检查 .backup/v{VERSION}.bak
   2. cp .backup/v{VERSION}.bak project-context.md
   3. BEGIN
-       UPDATE entries SET consolidated_seq=NULL WHERE consolidated_seq > VERSION
-       UPSERT system VALUES('evolve_seq', VERSION+1, datetime('now'))
+       UPDATE entries SET correction_count=0, consolidated_seq=NULL WHERE consolidated_seq > VERSION
+       UPSERT system VALUES('evolve_seq', VERSION, datetime('now'))
      COMMIT
   4. 输出 "已回滚到 v{VERSION}，后续记录已重置"
 

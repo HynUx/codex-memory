@@ -99,3 +99,47 @@
 2. 修复重要问题（I3-I6）
 3. 提交终审
 4. 终审通过后进入 writing-plans → 实施
+
+
+---
+
+## 2026-07-04 07:45 — 第 5 轮审查结果
+
+审查者: Nash (DeepSeek-V4-Pro, high-effort)
+结果: **条件通过**
+
+### 需求满足：R1-R16 全部通过 ✅
+
+### 修复确认
+| 问题 | 结果 | 说明 |
+|:----:|:----:|------|
+| F1 evolve 原子性 | ✅ 已修复 | rename 在 COMMIT 后 + version 注释 |
+| F2 correction 标记 | ❌ **未修复** | SQL 逻辑根本性错误: EXISTS 子查询永不为真 |
+| I3 自动阻塞 | ✅ 已修复 | load 仅提示 |
+| I4 ghost key | ✅ 已修复 | 并发表已修正 |
+| I5 rollback | ✅ 已修复 | --db 选项 |
+| I6 双阈值 | ✅ 已修复 | config.toml 唯一源 |
+
+### F2 修复方向
+entries 表加 `correction_count INTEGER DEFAULT 0` 列。
+delete/update 发现 consolidated_seq 非 NULL → `SET correction_count = correction_count + 1`（不置 NULL）。
+evolve step 2 捕捉条件改为 `consolidated_seq IS NULL AND correction_count = 0`。
+evolve step 5 用 `CASE WHEN correction_count > 0 THEN 'user_correction' ELSE 'new' END`。
+
+### 新发现重要问题
+1. UNIQUE 索引阻止"删→加→再删" → 改为 partial index `WHERE deleted=0`
+2. --rollback --db 后备份命名冲突 → 回滚时 evolve_seq 设为 VERSION
+
+### 当前状态
+- 存储位置: git/codex-memory/（Git 已初始化）
+- 待修复: F2 correction_count + UNIQUE 索引 + rollback 命名
+- 下一步: 修复后提交终审
+
+### F2 已修复（2026-07-04 07:55）
+- entries 表增加 correction_count 列
+- delete/update 改为 SET correction_count = correction_count + 1
+- evolve step 2 条件添加 AND correction_count = 0
+- evolve step 5 SQL 修复为 CASE WHEN correction_count > 0
+- UNIQUE 索引改为 partial index WHERE deleted=0
+- rollback 修复备份命名冲突
+状态: F2 已修复，待下一轮审查确认
