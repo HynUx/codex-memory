@@ -485,11 +485,13 @@ def _vec_rebuild(db):
         return
     db.execute("BEGIN")
     count = 0
+    failed = 0
     for i, row in enumerate(rows):
         text = "%s: %s %s" % (row["type"], row["content"], row["topics"])
         try:
             vec = embed.embed(text)
             if not vec.any():
+                failed += 1
                 continue  # skip zero vectors (embed failure)
             db.execute(
                 "INSERT OR REPLACE INTO entries_vec(seq, vector, model) VALUES(?, ?, ?)",
@@ -500,6 +502,7 @@ def _vec_rebuild(db):
                 db.commit()
                 db.execute("BEGIN")
         except Exception:
+            failed += 1
             continue  # skip failed entries
     db.commit()
     if count > 0:
