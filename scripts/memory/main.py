@@ -157,15 +157,17 @@ def load_config():
                         continue
                     key, val = line.split("=", 1)
                     key = key.strip()
-                    val = val.strip()
+                    val = val.strip().strip("'\"")  # I1: strip outer quotes first
                     if val.lower() in ("true", "false"):
                         cfg[key] = val.lower() == "true"
                     elif val.isdigit():
                         cfg[key] = int(val)
-                    else:
-                        cfg[key] = val.strip("'\"")
-        except (OSError, ValueError):
-            pass
+                    elif key in cfg:
+                        # F1: don't overwrite defaults with invalid values
+                        print(f"\u26a0 \u914d\u7f6e\u503c\u65e0\u6548: {key}={val}\uff0c\u4f7f\u7528\u9ed8\u8ba4\u503c", file=sys.stderr)
+        except (OSError, ValueError) as e:
+            # I2: user can see config read failures
+            print(f"\u26a0 \u8bfb\u53d6\u914d\u7f6e\u5931\u8d25: {e}\uff0c\u4f7f\u7528\u9ed8\u8ba4\u503c", file=sys.stderr)
     return cfg
 
 
@@ -397,6 +399,7 @@ def cmd_evolve(args):
 
         if not captured_seqs and not captured_del_seqs:
             print("\u6ca1\u6709\u9700\u8981\u8fdb\u5316\u7684\u8bb0\u5f55")
+            db.close()
             release_lock()
             return 0
 

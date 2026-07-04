@@ -91,11 +91,47 @@ class TestAutoEvolve(unittest.TestCase):
             ))
         with open(self._pc_path()) as f:
             content = f.read()
-        self.assertIn("<!-- evolve_seq:", content)
+        self.assertRegex(content, r"<!-- evolve_seq: \d+ -->")
         self.assertIn("entry 0", content)
         self.assertIn("entry 1", content)
         self.assertIn("entry 2", content)
 
+
+
+    def test_missing_config_falls_back_to_defaults(self):
+        """No config.toml -> defaults used, no crash."""
+        self._write_config(auto_evolve_threshold="3")
+        os.remove(mem.CONFIG_PATH)
+        for i in range(3):
+            mem.cmd_add(Namespace(
+                type="tip", content=f"entry {i}", topics="[]", no_evolve=False,
+            ))
+        # With no config, threshold=20, 3 entries below threshold, no evolve
+        self.assertFalse(os.path.exists(self._pc_path()))
+
+    def test_non_numeric_threshold_no_crash(self):
+        """Invalid threshold value uses default, no TypeError."""
+        with open(mem.CONFIG_PATH, "w") as f:
+            f.write("auto_evolve_threshold = invalid\n")
+            f.write("auto_evolve_enabled = true\n")
+        for i in range(3):
+            rc = mem.cmd_add(Namespace(
+                type="tip", content=f"entry {i}", topics="[]", no_evolve=False,
+            ))
+            self.assertEqual(rc, 0, "add should not crash on invalid config")
+        self.assertFalse(os.path.exists(self._pc_path()))
+
+    def test_quoted_config_values(self):
+        """TOML-style quoted values parsed correctly."""
+        with open(mem.CONFIG_PATH, "w") as f:
+            f.write('auto_evolve_threshold = "3"\n')
+            f.write('auto_evolve_enabled = "true"\n')
+        for i in range(3):
+            mem.cmd_add(Namespace(
+                type="tip", content=f"entry {i}", topics="[]", no_evolve=False,
+            ))
+        self.assertTrue(os.path.exists(self._pc_path()),
+                        "quoted true/3 should trigger evolve")
 
 if __name__ == "__main__":
     unittest.main()
