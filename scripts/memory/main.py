@@ -34,6 +34,18 @@ DB_PATH = os.path.join(MEMORY_DIR, "memory.db")
 LOCK_PATH = os.path.join(MEMORY_DIR, ".lock")
 CONFIG_PATH = os.path.join(MEMORY_DIR, "config.toml")
 
+# Available LLM models for learner mode (from Codex model list)
+# These are the models the Codex agent can use for memory analysis.
+AVAILABLE_MODELS = {
+    "deepseek-v4-flash": "DeepSeek V4 Flash (fast, economical, recommended)",
+    "deepseek-v4-pro":   "DeepSeek V4 Pro (high quality, slower)",
+    "qwen3.7-plus":      "Qwen 3.7 Plus (alternative)",
+    "glm-5.2":           "GLM 5.2 (alternative)",
+}
+
+# Default model for learner analysis
+DEFAULT_LEARNER_MODEL = "deepseek-v4-flash"
+
 VALID_TYPES = frozenset({
     "preference",
     "architecture",
@@ -108,6 +120,41 @@ CREATE TABLE IF NOT EXISTS system (
     value   TEXT NOT NULL,
     updated TEXT DEFAULT (datetime('now'))
 );
+
+
+CREATE TABLE IF NOT EXISTS entities (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    name     TEXT NOT NULL,
+    type     TEXT NOT NULL,
+    entity_values TEXT NOT NULL DEFAULT '[]',
+    created  TEXT DEFAULT (datetime('now')),
+    updated  TEXT DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_unique ON entities(name, type);
+CREATE TRIGGER IF NOT EXISTS entities_au AFTER UPDATE ON entities
+BEGIN UPDATE entities SET updated = datetime('now') WHERE id = new.id; END;
+
+CREATE TABLE IF NOT EXISTS relations (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    subject_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    predicate  TEXT NOT NULL,
+    object_id  INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    source_seq INTEGER REFERENCES entries(seq) ON DELETE SET NULL,
+    created    TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_relations_subject_id ON relations(subject_id);
+CREATE INDEX IF NOT EXISTS idx_relations_object_id ON relations(object_id);
+
+CREATE TABLE IF NOT EXISTS beliefs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    content      TEXT NOT NULL,
+    source_seqs  TEXT NOT NULL DEFAULT '[]',
+    confidence   REAL DEFAULT 0.5,
+    previous_id  INTEGER REFERENCES beliefs(id),
+    evolve_seq   INTEGER NOT NULL,
+    created      TEXT DEFAULT (datetime('now'))
+);
+
 """
 
 # ---- Database ---------------------------------------------------------------
@@ -124,6 +171,10 @@ def init_db():
     db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
     db.executescript(SCHEMA_SQL)
+    try:
+        db.execute("ALTER TABLE entries ADD COLUMN llm_processed_at TEXT DEFAULT NULL")
+    except Exception:
+        pass  # column already exists
     seeds = [
         ("schema_version", "1"),
         ("evolve_seq", "0"),
@@ -147,8 +198,9 @@ def load_config():
     """Load config.toml, return dict with defaults for missing keys."""
     cfg = {
         "auto_evolve_enabled": True,
-        "auto_evolve_threshold": 20,
+        "auto_evolve_threshold": 10,
         "suggest_threshold": 10,
+        "learner_model": DEFAULT_LEARNER_MODEL,
     }
     if os.path.exists(CONFIG_PATH):
         try:
@@ -225,10 +277,19 @@ def cmd_add(args):
             unmerged = db.execute(
                 "SELECT count(*) FROM entries WHERE deleted=0 AND (consolidated_seq IS NULL OR correction_count>0)"
             ).fetchone()[0]
-            threshold = cfg.get("auto_evolve_threshold", 20)
+            threshold = cfg.get("auto_evolve_threshold", 10)
             if unmerged >= threshold:
                 db.close()
                 print("触发自动进化...")
+                lf = open(LOCK_PATH, 'w')
+                try:
+                    fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(lf, fcntl.LOCK_UN)
+                except IOError:
+                    print("自动进化跳过（其他进程正在处理）")
+                    return 0
+                finally:
+                    lf.close()
                 cmd_evolve(None)
                 return 0
 
@@ -288,10 +349,17 @@ def cmd_list(args):
     """Browse all memories without keywords."""
     db = init_db()
     limit = getattr(args, "limit", 10)
-    rows = db.execute(
-        "SELECT seq, type, content, topics FROM entries WHERE deleted=0 ORDER BY seq DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
+    unprocessed = getattr(args, "unprocessed", False)
+    if unprocessed:
+        rows = db.execute(
+            "SELECT seq, type, content, topics FROM entries WHERE deleted=0 AND llm_processed_at IS NULL AND (consolidated_seq IS NULL OR correction_count>0) ORDER BY seq LIMIT ?",
+            (limit,),
+        ).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT seq, type, content, topics FROM entries WHERE deleted=0 ORDER BY seq DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
 
     if not rows:
         print("暂无记忆")
@@ -391,6 +459,35 @@ def release_lock():
         _lock_fd = None
 
 
+
+def _vec_rebuild(db):
+    """Rebuild vector index for active entries. Caller must ensure embed.is_available()."""
+    rows = db.execute(
+        "SELECT seq, content, type, topics FROM entries WHERE deleted=0"
+    ).fetchall()
+    if not rows:
+        return
+    db.execute("BEGIN")
+    count = 0
+    for i, row in enumerate(rows):
+        text = "%s: %s %s" % (row["type"], row["content"], row["topics"])
+        try:
+            vec = embed.embed(text)
+            if not vec.any():
+                continue  # skip zero vectors (embed failure)
+            db.execute(
+                "INSERT OR REPLACE INTO entries_vec(seq, vector, model) VALUES(?, ?, ?)",
+                (row["seq"], vec.tobytes(), "bge-small-zh-v1.5"),
+            )
+            count += 1
+            if count > 0 and count % 100 == 0:
+                db.commit()
+                db.execute("BEGIN")
+        except Exception:
+            continue  # skip failed entries
+    db.commit()
+    if count > 0:
+        print(f"\u5411\u91cf\u7d22\u5f15\u5df2\u66f4\u65b0: {count} \u6761")
 def cmd_evolve(args):
     """Consolidate unmerged entries into project-context.md."""
     acquire_lock()
@@ -476,10 +573,23 @@ def cmd_evolve(args):
         db.commit()
         os.rename(tmp, pc_path)
         print("\u2713 \u8fdb\u5316\u5b8c\u6210 (V=%d)" % V)
+
+        # Auto-sync vector index after evolve
+        if embed.is_available():
+            unindexed = db.execute(
+                "SELECT count(*) FROM entries e LEFT JOIN entries_vec v ON e.seq=v.seq WHERE e.deleted=0 AND v.seq IS NULL"
+            ).fetchone()[0]
+            if unindexed > 0:
+                print("\u5411\u91cf\u7d22\u5f15\u540c\u6b65\u4e2d...")
+                _vec_rebuild(db)
+
         db.close()
     finally:
         release_lock()
     return 0
+
+
+
 
 
 def cmd_load(args):
@@ -514,7 +624,8 @@ def cmd_load(args):
     unmerged = db.execute(
         "SELECT count(*) FROM entries WHERE deleted=0 AND (consolidated_seq IS NULL OR correction_count>0)"
     ).fetchone()[0]
-    if unmerged >= 10:
+    cfg_sug = load_config().get("suggest_threshold", 10)
+    if unmerged >= cfg_sug:
         print("\u26a0\ufe0f %d \u6761\u672a\u5408\u5e76\uff0c\u8fd0\u884c memory evolve \u66f4\u65b0" % unmerged)
 
     if len(output) > 12000:
@@ -743,7 +854,8 @@ def build_parser():
     # list
     p = sub.add_parser("list", help="浏览记忆")
     p.add_argument("--limit", type=int, default=10)
-
+    p.add_argument("--unprocessed", action="store_true",
+                    help="仅列出未 LLM 处理的条目")
     # delete
     p = sub.add_parser("delete", help="软删除一条记忆")
     p.add_argument("seq", type=int, help="要删除的记录序号")
@@ -761,10 +873,27 @@ def build_parser():
     # load
     p = sub.add_parser("load", help="加载记忆上下文")
     p.add_argument("--limit", type=int, default=10)
-
     # export
     p = sub.add_parser("export", help="导出 Obsidian 兼容 Markdown")
     p.add_argument("--dir", help="导出目录")
+
+    # status
+    # review
+    p = sub.add_parser("review", help="输出未 LLM 处理的条目用于分析")
+    p.add_argument("review_cmd", nargs="?", default="list",
+                    choices=["list", "mark"],
+                    help="list=列出未处理条目, mark=标记已处理")
+    p.add_argument("--limit", type=int, default=20,
+                    help="列出条数上限")
+    p.add_argument("--seq", type=int, help="要标记的 seq")
+
+
+    # config
+    p = sub.add_parser("config", help="配置系统")
+    p.add_argument("config_cmd", nargs="?", default="show",
+                    choices=["show", "set-model"],
+                    help="配置操作")
+    p.add_argument("--model", help="设置学习模型")
 
     # status
     p = sub.add_parser("status", help="系统状态仪表盘")
@@ -779,6 +908,97 @@ def build_parser():
 
     return parser
 
+
+
+def cmd_config(args):
+    """Configure memory system settings."""
+    cfg_path = CONFIG_PATH
+    sub = getattr(args, "config_cmd", "show")
+    
+    if sub == "show":
+        print("\n当前配置:")
+        if os.path.exists(cfg_path):
+            with open(cfg_path) as f:
+                print(f.read())
+        else:
+            print("  无配置文件（使用默认值）")
+        print(f"\n可用模型:")
+        for name, desc in AVAILABLE_MODELS.items():
+            marker = " *" if name == load_config().get("learner_model", DEFAULT_LEARNER_MODEL) else "  "
+            print(f"  {marker} {name}: {desc}")
+        return 0
+    
+    if sub == "set-model":
+        model = getattr(args, "model", None)
+        if not model:
+            print(f"请指定模型: --model <名称>")
+            print(f"可用模型: {', '.join(AVAILABLE_MODELS.keys())}")
+            return 1
+        if model not in AVAILABLE_MODELS:
+            print(f"无效模型: {model}")
+            print(f"可用模型: {', '.join(AVAILABLE_MODELS.keys())}")
+            return 1
+        
+        # Update learner_model in config.toml (preserve comments and other keys)
+        updated_lines = []
+        found = False
+        if os.path.exists(cfg_path):
+            with open(cfg_path) as f:
+                for line in f:
+                    stripped = line.lstrip()
+                    if stripped.startswith('learner_model') and '=' in stripped:
+                        updated_lines.append(f'learner_model = {model}\n')
+                        found = True
+                    else:
+                        updated_lines.append(line)
+        if not found:
+            updated_lines.append(f'learner_model = {model}\n')
+        with open(cfg_path, 'w') as f:
+            f.writelines(updated_lines)
+        
+        print(f"\u2713 learner_model \u5df2\u8bbe\u4e3a: {model}")
+        return 0
+    
+    return 0
+
+
+def cmd_review(args):
+    """Output unprocessed entries for Codex agent to analyze with LLM."""
+    db = init_db()
+    cfg = load_config()
+    model = cfg.get("learner_model", DEFAULT_LEARNER_MODEL)
+    sub = getattr(args, "review_cmd", "list")
+
+    if sub == "list":
+        rows = db.execute(
+            "SELECT seq, type, content, topics, correction_count FROM entries "
+            "WHERE deleted=0 AND llm_processed_at IS NULL "
+            "ORDER BY seq LIMIT ?",
+            (getattr(args, "limit", 20),)
+        ).fetchall()
+        import json
+        output = {
+            "model": model,
+            "count": len(rows),
+            "entries": [{"seq": r[0], "type": r[1], "content": r[2],
+                         "topics": r[3], "corrections": r[4]} for r in rows]
+        }
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        db.close()
+        return 0
+
+    if sub == "mark":
+        seq = getattr(args, "seq", None)
+        if seq:
+            db.execute("UPDATE entries SET llm_processed_at=datetime('now') WHERE seq=?", (seq,))
+            db.commit()
+            print(f"✓ seq={seq} 已标记为已处理")
+        else:
+            print("✗ 请指定 --seq")
+        db.close()
+        return 0
+
+    return 0
 COMMAND_DISPATCH = {
     "vec": cmd_vec,
     "migrate": cmd_migrate,
@@ -790,7 +1010,9 @@ COMMAND_DISPATCH = {
     "add": cmd_add,
     "load": cmd_load,
     "export": cmd_export,
+    "config": cmd_config,
     "status": cmd_status,
+    "review": cmd_review,
 }
 
 

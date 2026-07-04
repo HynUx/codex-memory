@@ -20,7 +20,7 @@ class TestBuildParser(unittest.TestCase):
     """build_parser() must return a complete ArgumentParser with all subcommands."""
 
     EXPECTED_COMMANDS = [
-        "add", "search", "list", "delete", "update",
+        "config", "review",        "add", "search", "list", "delete", "update",
         "evolve", "load", "export", "status", "vec", "migrate",
     ]
 
@@ -151,8 +151,9 @@ class TestCommandDispatch(unittest.TestCase):
     """COMMAND_DISPATCH must map all 9 commands to correct handler functions."""
 
     def test_all_commands_mapped(self):
-        """COMMAND_DISPATCH has all 11 entries."""
-        expected = {"add", "search", "list", "delete", "update",
+        """COMMAND_DISPATCH has all 13 entries."""
+        expected = {"config", "review",
+        "add", "search", "list", "delete", "update",
                     "evolve", "load", "export", "status", "vec", "migrate"}
         self.assertCountEqual(mem.COMMAND_DISPATCH.keys(), expected)
 

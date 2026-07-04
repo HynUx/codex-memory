@@ -211,6 +211,36 @@ memory status
 
 ---
 
+### `memory config` — 配置系统
+
+```bash
+memory config [show|set-model] [--model <名称>]
+```
+
+- `show` — 显示当前配置和可用模型列表（当前选择的模型带 * 标记）
+- `set-model --model <名称>` — 设置学习分析使用的模型
+
+可用模型：
+- `deepseek-v4-flash`（默认）— 快速、经济的推理
+- `deepseek-v4-pro` — 高质量但稍慢
+- `qwen3.7-plus` — 备选
+- `glm-5.2` — 备选
+
+---
+
+### `memory review` — 学习分析（Codex 会话驱动）
+
+```bash
+memory review [list|mark] [--limit N] [--seq N]
+```
+
+- `list` — 输出未经过 LLM 处理的条目（JSON 格式），包含每条记录的 seq、type、content、correction_count，以及配置的 learner_model 名称
+- `mark --seq N` — 将指定 seq 标记为 `llm_processed_at=now`
+
+**使用场景**：Codex 会话开始时，agent 调用 `memory review list` 获取未处理条目，使用配置的 learner_model 进行分析，然后将分析结果写入 entities/beliefs 表，最后调用 `memory review mark` 标记已处理。
+
+---
+
 ### `memory vec` — 向量索引管理
 
 ```bash
@@ -308,10 +338,13 @@ memory migrate
 auto_evolve_enabled = true
 
 # 触发自动进化的未合并记录数阈值
-auto_evolve_threshold = 20
+auto_evolve_threshold = 10
 
 # load 命令中提示进化的未合并记录数阈值
 suggest_threshold = 10
+
+# 学习分析使用的模型（首次配置后生效）
+learner_model = "deepseek-v4-flash"  # 可选值见 memory config show
 ```
 
 如不配置则使用默认值。
