@@ -28,6 +28,7 @@ import sys
 import time
 import re
 import embed
+import seg
 
 MEMORY_DIR = os.path.expanduser("~/.codex/memory")
 DB_PATH = os.path.join(MEMORY_DIR, "memory.db")
@@ -88,25 +89,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
     content='entries', content_rowid='seq'
 );
 
-DROP TRIGGER IF EXISTS entries_ai;
-CREATE TRIGGER entries_ai AFTER INSERT ON entries BEGIN
-    INSERT INTO entries_fts(rowid, content, topics)
-    VALUES (new.seq, new.content, new.topics);
-END;
 
-DROP TRIGGER IF EXISTS entries_ad;
-CREATE TRIGGER entries_ad AFTER DELETE ON entries BEGIN
-    INSERT INTO entries_fts(entries_fts, rowid, content, topics)
-    VALUES('delete', old.seq, old.content, old.topics);
-END;
 
-DROP TRIGGER IF EXISTS entries_au;
-CREATE TRIGGER entries_au AFTER UPDATE ON entries BEGIN
-    INSERT INTO entries_fts(entries_fts, rowid, content, topics)
-    VALUES('delete', old.seq, old.content, old.topics);
-    INSERT INTO entries_fts(rowid, content, topics)
-    VALUES (new.seq, new.content, new.topics);
-END;
 
 CREATE TABLE IF NOT EXISTS entries_vec (
     seq    INTEGER PRIMARY KEY,
@@ -159,6 +143,18 @@ CREATE TABLE IF NOT EXISTS beliefs (
 
 # ---- Database ---------------------------------------------------------------
 
+def _sync_fts(db, seq, content, topics):
+    """Synchronize FTS5 index for a single entry.
+
+    Does NOT manage transactions — caller must wrap in appropriate
+    BEGIN/COMMIT to ensure atomicity with the primary write.
+    """
+    seg_content = seg.maybe_segment(content)
+    db.execute(
+        "INSERT OR REPLACE INTO entries_fts(rowid, content, topics) VALUES(?, ?, ?)",
+        (seq, seg_content, topics),
+    )
+
 
 def _run_migrations(db):
     """Run schema migrations based on PRAGMA user_version.
@@ -177,6 +173,26 @@ def _run_migrations(db):
         except sqlite3.OperationalError:
             pass  # column already exists
         db.execute("PRAGMA user_version = 2")
+
+    if version < 3:
+        # Remove legacy FTS5 triggers
+        db.executescript("""
+            DROP TRIGGER IF EXISTS entries_ai;
+            DROP TRIGGER IF EXISTS entries_ad;
+            DROP TRIGGER IF EXISTS entries_au;
+        """)
+        # Re-index all active entries
+        rows = db.execute(
+            "SELECT seq, content, topics FROM entries WHERE deleted=0"
+        ).fetchall()
+        for r in rows:
+            try:
+                _sync_fts(db, r["seq"],
+                          seg.maybe_segment(r["content"]), r["topics"])
+            except Exception:
+                # Fallback: sync with raw content
+                _sync_fts(db, r["seq"], r["content"], r["topics"])
+        db.execute("PRAGMA user_version = 3")
 
 
 def init_db():
@@ -278,12 +294,11 @@ def cmd_add(args):
         "INSERT INTO entries(type, content, topics, sha256) VALUES (?, ?, ?, ?)",
         (args.type, content, topics_raw, sha256),
     )
+    seq = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    _sync_fts(db, seq, content, topics_raw)
     db.execute("UPDATE system SET value = CAST(value AS INTEGER) + 1 WHERE key = 'total_adds'")
     db.commit()
 
-    seq = db.execute(
-        "SELECT seq FROM entries WHERE sha256 = ?", (sha256,),
-    ).fetchone()["seq"]
     print(f"✓ 已记录 (seq={seq})")
 
     # Auto-evolve trigger
@@ -316,6 +331,7 @@ def cmd_search(args):
     """Search memories via FTS5 with LIKE fallback."""
     db = init_db()
     kw = args.keywords
+    fts_kw = seg.maybe_segment(kw)
     limit = getattr(args, "limit", 5)
     offset = getattr(args, "offset", 0)
 
@@ -324,7 +340,7 @@ def cmd_search(args):
            JOIN entries e ON f.rowid = e.seq
            WHERE entries_fts MATCH ? AND e.deleted=0
            ORDER BY rank LIMIT ? OFFSET ?""",
-        (kw, limit, offset),
+        (fts_kw, limit, offset),
     ).fetchall()
 
     if not rows:
@@ -403,6 +419,7 @@ def cmd_delete(args):
         return 1
     seq, cs = row["seq"], row["consolidated_seq"]
     db.execute("UPDATE entries SET deleted=1 WHERE seq=?", (seq,))
+    db.execute("DELETE FROM entries_fts WHERE rowid = ?", (seq,))
     if cs is not None:
         db.execute("UPDATE entries SET correction_count = correction_count + 1 WHERE seq=?", (seq,))
         db.execute(
@@ -441,6 +458,7 @@ def cmd_update(args):
         "UPDATE entries SET type=?, content=?, topics=?, sha256=? WHERE seq=?",
         (new_type, new_content, new_topics, new_sha256, args.seq),
     )
+    _sync_fts(db, args.seq, new_content, new_topics)
     if row["consolidated_seq"] is not None:
         db.execute(
             "UPDATE entries SET correction_count = correction_count + 1 WHERE seq=?",
@@ -865,6 +883,8 @@ def cmd_migrate(args):
                 "INSERT INTO entries(type, content, topics, sha256) VALUES (?, ?, ?, ?)",
                 (typ, content, topics, sha256),
             )
+            seq = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+            _sync_fts(db, seq, content, topics)
             count += 1
     db.commit()
     print("\u2713 \u5df2\u8fc1\u79fb %d \u6761\u8bb0\u5f55" % count)

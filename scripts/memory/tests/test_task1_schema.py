@@ -42,8 +42,10 @@ class TestInitDB(unittest.TestCase):
         names = [r["name"] for r in self.db.execute(
             "SELECT name FROM sqlite_master WHERE type='trigger' ORDER BY name"
         ).fetchall()]
+        # FTS5 triggers removed in v3; Python manages FTS5 sync via _sync_fts
+        # Only entities_au trigger remains
         for t in ["entries_ai", "entries_ad", "entries_au"]:
-            self.assertIn(t, names)
+            self.assertNotIn(t, names)
 
     def test_indexes_exist(self):
         names = [r["name"] for r in self.db.execute(
@@ -97,12 +99,15 @@ class TestInitDB(unittest.TestCase):
         ).fetchone()[0], 0)
 
     def test_fts_trigger_sync(self):
-        self.db.execute("INSERT INTO entries(type,content,topics,sha256) VALUES(?,?,?,?)",
-                        ("workflow", "hello world", "[]", "ft1"))
-        s = self.db.execute("SELECT seq FROM entries WHERE sha256='ft1'").fetchone()["seq"]
-        self.assertEqual(self.db.execute(
+        # FTS5 triggers removed in v3 — Python manages FTS5 sync via _sync_fts.
+        # Direct INSERT no longer auto-syncs to FTS5.
+        self.db.execute(
+            "INSERT INTO entries(type,content,topics,sha256) VALUES(?,?,?,?)",
+            ("workflow", "hello world", "[]", "ft1"))
+        hit = self.db.execute(
             "SELECT rowid FROM entries_fts WHERE entries_fts MATCH 'hello'"
-        ).fetchone()[0], s)
+        ).fetchone()
+        self.assertIsNone(hit)
 
     def test_entries_vec_fk_defined(self):
         info = self.db.execute("PRAGMA foreign_key_list(entries_vec)").fetchall()
