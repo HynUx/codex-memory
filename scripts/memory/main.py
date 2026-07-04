@@ -182,6 +182,62 @@ def cmd_add(args):
     ).fetchone()["seq"]
     print(f"✓ 已记录 (seq={seq})")
     db.close()
+    return 0
+
+def cmd_search(args):
+    """Search memories via FTS5 with LIKE fallback."""
+    db = init_db()
+    kw = args.keywords
+    limit = getattr(args, "limit", 5)
+    offset = getattr(args, "offset", 0)
+
+    rows = db.execute(
+        """SELECT e.seq, e.type, e.content, e.topics FROM entries_fts f
+           JOIN entries e ON f.rowid = e.seq
+           WHERE entries_fts MATCH ? AND e.deleted=0
+           ORDER BY rank LIMIT ? OFFSET ?""",
+        (kw, limit, offset),
+    ).fetchall()
+
+    if not rows:
+        like = "%%%s%%" % kw
+        rows = db.execute(
+            "SELECT seq, type, content, topics FROM entries WHERE content LIKE ? AND deleted=0 LIMIT ? OFFSET ?",
+            (like, limit, offset),
+        ).fetchall()
+
+    if not rows:
+        print("未找到相关记忆")
+        db.close()
+        return 0
+
+    print("相关记忆（共 %d 条）：" % len(rows))
+    for seq, typ, content, topics in rows:
+        print("  [seq:%d] %s | %s | %.60s..." % (seq, typ, topics, content))
+    db.close()
+    return 0
+
+
+def cmd_list(args):
+    """Browse all memories without keywords."""
+    db = init_db()
+    limit = getattr(args, "limit", 10)
+    rows = db.execute(
+        "SELECT seq, type, content, topics FROM entries WHERE deleted=0 ORDER BY seq DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+
+    if not rows:
+        print("暂无记忆")
+        db.close()
+        return 0
+
+    print("记忆列表（共 %d 条）：" % len(rows))
+    for seq, typ, content, topics in rows:
+        print("  [seq:%d] %s | %s | %.60s..." % (seq, typ, topics, content))
+    db.close()
+    return 0
+
 
 def build_parser():
     """Build and return the argument parser with all subcommands."""
@@ -202,10 +258,24 @@ def build_parser():
         help="跳过自动 evolve 触发",
     )
 
-    return parser
+
+    # search
+    p = sub.add_parser("search", help="搜索记忆")
+    p.add_argument("keywords", help="搜索关键词")
+    p.add_argument("--limit", type=int, default=5)
+    p.add_argument("--offset", type=int, default=0)
+    p.add_argument("--type", help="按类型过滤")
+    p.add_argument("--topic", help="按主题过滤")
+    p.add_argument("--days", type=int, help="最近 N 天")
+
+    # list
+    p = sub.add_parser("list", help="浏览记忆")
+    p.add_argument("--limit", type=int, default=10)
 
 
 COMMAND_DISPATCH = {
+    "search": cmd_search,
+    "list": cmd_list,
     "add": cmd_add,
 }
 

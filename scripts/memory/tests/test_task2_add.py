@@ -43,7 +43,7 @@ class TestAddCommand(unittest.TestCase):
 
     def test_add_success(self):
         rc, out = self._add()
-        self.assertIsNone(rc)
+        self.assertEqual(rc, 0)
         self.assertIn("✓", out)
         row = self.db.execute("SELECT seq,type,content,topics FROM entries WHERE deleted=0").fetchone()
         self.assertIsNotNone(row)
@@ -73,14 +73,14 @@ class TestAddCommand(unittest.TestCase):
 
     def test_add_with_topics(self):
         rc, _ = self._add(content="topic test", topics='["codex","memory"]')
-        self.assertIsNone(rc)
+        self.assertEqual(rc, 0)
         row = self.db.execute("SELECT topics FROM entries WHERE content='topic test'").fetchone()
         self.assertIn("codex", row["topics"])
 
     def test_add_seq_increment(self):
         for i in range(3):
             rc, _ = self._add(content=f"seq test {i}")
-            self.assertIsNone(rc)
+            self.assertEqual(rc, 0)
         seqs = [r["seq"] for r in self.db.execute(
             "SELECT seq FROM entries WHERE deleted=0 ORDER BY seq").fetchall()]
         self.assertEqual(seqs, [1, 2, 3])
@@ -91,7 +91,7 @@ class TestAddCommand(unittest.TestCase):
             "SELECT value FROM system WHERE key='total_adds'"
         ).fetchone()
         self.assertIsNotNone(total)
-        self.assertGreaterEqual(int(total["value"]), 1)
+        self.assertEqual(int(total["value"]), 1)
 
     def test_add_fts_sync(self):
         self._add(content="fts sync test abc123")
