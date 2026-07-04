@@ -646,7 +646,29 @@ def build_parser():
     # list
     p = sub.add_parser("list", help="浏览记忆")
     p.add_argument("--limit", type=int, default=10)
+    # evolve
+    p = sub.add_parser("evolve", help="合并记忆到 project-context.md")
 
+    # load
+    p = sub.add_parser("load", help="加载记忆上下文")
+    p.add_argument("--limit", type=int, default=10)
+
+    # export
+    p = sub.add_parser("export", help="导出 Obsidian 兼容 Markdown")
+    p.add_argument("--dir", help="导出目录")
+
+    # status
+    p = sub.add_parser("status", help="系统状态仪表盘")
+
+    # vec
+    p = sub.add_parser("vec", help="向量索引管理")
+    p.add_argument("vec_cmd", nargs="?", default="status",
+                    choices=["enable", "rebuild", "status"])
+
+    # migrate
+    p = sub.add_parser("migrate", help="从 learnings.jsonl 导入")
+
+    return parser
 
 COMMAND_DISPATCH = {
     "vec": cmd_vec,
@@ -657,6 +679,9 @@ COMMAND_DISPATCH = {
     "update": cmd_update,
     "evolve": cmd_evolve,
     "add": cmd_add,
+    "load": cmd_load,
+    "export": cmd_export,
+    "status": cmd_status,
 }
 
 
@@ -677,37 +702,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()    # evolve
-    p = sub.add_parser("evolve", help="\u5408\u5e76\u8bb0\u5fc6\u5230 project-context.md")
-    # load
-    p = sub.add_parser("load", help="\u52a0\u8f7d\u8bb0\u5fc6\u4e0a\u4e0b\u6587")
-    p.add_argument("--limit", type=int, default=10)
-
-    # export
-    p = sub.add_parser("export", help="\u5bfc\u51fa Obsidian \u517c\u5bb9 Markdown")
-    p.add_argument("--dir", help="\u5bfc\u51fa\u76ee\u5f55")
-
-    # status
-    p = sub.add_parser("status", help="\u7cfb\u7edf\u72b6\u6001\u4eea\u8868\u76d8")
-
-    # load
-    p = sub.add_parser("load", help="\u52a0\u8f7d\u8bb0\u5fc6\u4e0a\u4e0b\u6587")
-    p.add_argument("--limit", type=int, default=10)
-
-    # export
-    p = sub.add_parser("export", help="\u5bfc\u51fa Obsidian \u517c\u5bb9 Markdown")
-    p.add_argument("--dir", help="\u5bfc\u51fa\u76ee\u5f55")
-
-    # status
-    p = sub.add_parser("status", help="\u7cfb\u7edf\u72b6\u6001\u4eea\u8868\u76d8")
-
-
-    # vec
-    p = sub.add_parser("vec", help="向量索引管理")
-    p.add_argument("vec_cmd", nargs="?", default="status",
-                   choices=["enable", "rebuild", "status"])
-
-    # migrate
-    p = sub.add_parser("migrate", help="从 learnings.jsonl 导入")
-
-
+    main()
