@@ -21,6 +21,7 @@ import argparse
 import fcntl
 import hashlib
 import json
+import shutil
 import os
 import sqlite3
 import sys
@@ -304,6 +305,117 @@ def cmd_update(args):
     db.close()
     return 0
 
+
+_lock_fd = None
+
+
+def acquire_lock():
+    """Acquire an exclusive file lock for evolve."""
+    global _lock_fd
+    os.makedirs(os.path.dirname(LOCK_PATH), exist_ok=True)
+    _lock_fd = open(LOCK_PATH, 'w')
+    fcntl.flock(_lock_fd, fcntl.LOCK_EX)
+
+
+def release_lock():
+    """Release the file lock."""
+    global _lock_fd
+    if _lock_fd is not None:
+        fcntl.flock(_lock_fd, fcntl.LOCK_UN)
+        _lock_fd.close()
+        _lock_fd = None
+
+
+def cmd_evolve(args):
+    """Consolidate unmerged entries into project-context.md."""
+    acquire_lock()
+    try:
+        db = init_db()
+        V = int(db.execute(
+            "SELECT value FROM system WHERE key='evolve_seq'"
+        ).fetchone()["value"]) + 1
+
+        rows = db.execute(
+            "SELECT seq, correction_count FROM entries "
+            "WHERE deleted=0 AND (consolidated_seq IS NULL OR correction_count > 0)"
+        ).fetchall()
+        captured_seqs = [r["seq"] for r in rows]
+        captured_cc = {r["seq"]: r["correction_count"] for r in rows}
+
+        del_rows = db.execute(
+            "SELECT seq, correction_count FROM entries "
+            "WHERE deleted=1 AND correction_count > 0"
+        ).fetchall()
+        captured_del_seqs = [r["seq"] for r in del_rows]
+        captured_del_cc = {r["seq"]: r["correction_count"] for r in del_rows}
+
+        if not captured_seqs and not captured_del_seqs:
+            print("\u6ca1\u6709\u9700\u8981\u8fdb\u5316\u7684\u8bb0\u5f55")
+            release_lock()
+            return 0
+
+        pc_path = os.path.join(MEMORY_DIR, "project-context.md")
+        backup_dir = os.path.join(MEMORY_DIR, ".backup")
+        os.makedirs(backup_dir, exist_ok=True)
+        if os.path.exists(pc_path):
+            shutil.copy2(pc_path, os.path.join(backup_dir, "v%d.bak" % (V - 1)))
+
+        existing = open(pc_path).read() if os.path.exists(pc_path) else ""
+
+        new_entries = db.execute(
+            "SELECT seq, content, type, topics FROM entries WHERE seq IN (%s)" %
+            ",".join("?" * len(captured_seqs)),
+            captured_seqs,
+        ).fetchall() if captured_seqs else []
+
+        del_entries = []
+        if captured_del_seqs:
+            del_entries = db.execute(
+                "SELECT seq, content, type, topics FROM entries WHERE seq IN (%s)" %
+                ",".join("?" * len(captured_del_seqs)),
+                captured_del_seqs,
+            ).fetchall()
+
+        out = "<!-- evolve_seq: %d -->\n\n# \u9879\u76ee\u4e0a\u4e0b\u6587\n\n" % V
+        for e in new_entries:
+            tag = " [user_correction]" if captured_cc.get(e["seq"], 0) > 0 else ""
+            out += "- seq=%d [%s%s]: %s\n" % (e["seq"], e["type"], tag, e["content"])
+        if del_entries:
+            out += "\n## \u5df2\u5220\u9664\n\n"
+            for e in del_entries:
+                out += "- seq=%d: ~~%s~~\n" % (e["seq"], e["content"])
+
+        tmp = pc_path + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(out)
+
+        db.execute("BEGIN")
+        for seq in captured_seqs:
+            db.execute(
+                "UPDATE entries SET consolidated_seq=?, correction_count=0 "
+                "WHERE seq=? AND correction_count=?",
+                (V, seq, captured_cc.get(seq, 0)),
+            )
+        for seq in captured_del_seqs:
+            db.execute(
+                "UPDATE entries SET correction_count=0 WHERE seq=? AND correction_count=?",
+                (seq, captured_del_cc.get(seq, 0)),
+            )
+        db.execute(
+            "INSERT OR REPLACE INTO system(key, value, updated) "
+            "VALUES('evolve_seq', ?, datetime('now'))",
+            (str(V),),
+        )
+        db.execute("UPDATE system SET value = CAST(value AS INTEGER) + 1 WHERE key='total_evolves'")
+        db.commit()
+        os.rename(tmp, pc_path)
+        print("\u2713 \u8fdb\u5316\u5b8c\u6210 (V=%d)" % V)
+        db.close()
+    finally:
+        release_lock()
+    return 0
+
+
 def build_parser():
     """Build and return the argument parser with all subcommands."""
     parser = argparse.ArgumentParser(prog="memory")
@@ -343,6 +455,7 @@ COMMAND_DISPATCH = {
     "list": cmd_list,
     "delete": cmd_delete,
     "update": cmd_update,
+    "evolve": cmd_evolve,
     "add": cmd_add,
 }
 
@@ -364,4 +477,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()    # evolve
+    p = sub.add_parser("evolve", help="\u5408\u5e76\u8bb0\u5fc6\u5230 project-context.md")
+
