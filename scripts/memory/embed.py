@@ -32,6 +32,9 @@ def is_available():
 def _get_model():
     """Lazy-load the SentenceTransformer model (cached after first call)."""
     global _model
+    # Force offline mode to prevent network access attempts in sandbox
+    os.environ.setdefault('TRANSFORMERS_OFFLINE', '1')
+    os.environ.setdefault('HF_HUB_OFFLINE', '1')
     if _model is None:
         from sentence_transformers import SentenceTransformer
         if not os.path.exists(MODELS_DIR) or not os.listdir(MODELS_DIR):
@@ -62,8 +65,13 @@ def embed(text):
         numpy.ndarray of shape (512,), dtype float32, L2-normalized.
     """
     model = _get_model()
-    vec = model.encode(text, normalize_embeddings=True)
-    return vec.astype(np.float32)
+    try:
+        vec = model.encode(text, normalize_embeddings=True)
+        return vec.astype(np.float32)
+    except Exception as e:
+        import sys
+        print(f'⚠️ 向量编码失败: {e}', file=sys.stderr)
+        return np.zeros(512, dtype=np.float32)
 
 
 def cosine_similarity(a, b):

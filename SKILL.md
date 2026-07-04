@@ -39,7 +39,7 @@ python3 scripts/memory/main.py status
 alias memory='python3 "\$(pwd)/scripts/memory/main.py"'
 ```
 
-**依赖**：Python 3 (>=3.10) + SQLite（stdlib）。零额外安装。
+**依赖**：Python 3 (>=3.10) + SQLite（stdlib）。零额外安装。向量搜索需额外安装 `pip install sentence-transformers`。
 
 ---
 
@@ -217,12 +217,32 @@ memory status
 memory vec [status|enable|rebuild]
 ```
 
-- `status` — 显示向量索引状态
-- `enable` — [占位] 下载嵌入模型并构建索引
-- `rebuild` — [占位] 重建向量索引
+- `status` — 显示向量索引状态（可用/不可用，已索引数/总数）
+- `enable` — 下载 BGE-small-zh-v1.5 嵌入模型，为所有有效记录计算 512 维向量并存入 `entries_vec` 表
+- `rebuild` — 清空 `entries_vec`，重新为所有有效记录计算向量（用于添加新记录后同步索引）
 
----
+**前置条件**：
 
+```bash
+pip install sentence-transformers
+```
+
+**使用流程**：
+
+```bash
+# 1. 安装依赖
+pip install sentence-transformers
+
+# 2. 启用索引（首次会自动下载模型，约 190MB）
+memory vec enable
+
+# 3. 验证
+memory vec status
+
+# 4. 添加新记录后重建索引
+memory add --type tip --content "新知识"
+memory vec rebuild
+```
 ### `memory migrate` — 从旧系统导入
 
 ```bash
