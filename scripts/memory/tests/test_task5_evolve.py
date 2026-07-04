@@ -95,13 +95,17 @@ class TestEvolve(unittest.TestCase):
         self.assertGreaterEqual(int(te), 1)
 
     def test_evolve_skips_consolidated(self):
-        """Already consolidated entries should not be re-processed."""
+        """Already consolidated entries preserved in second evolve."""
         self._add("skip me")
         self._evolve()
-        # Second evolve should find nothing new
+        # Second evolve should succeed and preserve entries
         rc, out = self._evolve()
-        self.assertIn("没有", out)
-
+        self.assertEqual(rc, 0)
+        self.assertIn("进化完成", out)
+        pc = os.path.join(mem.MEMORY_DIR, "project-context.md")
+        with open(pc) as f:
+            text = f.read()
+        self.assertIn("skip me", text)
     def test_evolve_backup_created(self):
         """Second evolve should create backup of first project-context.md."""
         self._add("backup test")

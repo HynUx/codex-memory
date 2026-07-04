@@ -164,22 +164,6 @@ def _run_migrations(db):
     """Run schema migrations based on PRAGMA user_version.
 
     Each migration checks current version and applies incremental
-    changes, then increments user_version.  New databases start at
-    version 0 (no version set) and are migrated forward to the latest.
-    """
-    version = db.execute("PRAGMA user_version").fetchone()[0]
-
-    if version < 2:
-        db.execute(
-            "ALTER TABLE entries ADD COLUMN llm_processed_at TEXT DEFAULT NULL"
-        )
-        db.execute("PRAGMA user_version = 2")
-
-
-def _run_migrations(db):
-    """Run schema migrations based on PRAGMA user_version.
-
-    Each migration checks current version and applies incremental
     changes, then increments user_version.  All migrations are
     designed to be idempotent (safe to re-apply).
     """
@@ -521,7 +505,12 @@ def _vec_rebuild(db):
     if count > 0:
         print(f"\u5411\u91cf\u7d22\u5f15\u5df2\u66f4\u65b0: {count} \u6761")
 def cmd_evolve(args):
-    """Consolidate unmerged entries into project-context.md."""
+    """Consolidate unmerged entries into project-context.md.
+
+    Writes ALL active entries to project-context.md (not just unmerged
+    ones), marks newly unmerged entries as consolidated, and prunes old
+    backups beyond the retention limit.
+    """
     acquire_lock()
     try:
         db = init_db()
@@ -529,21 +518,25 @@ def cmd_evolve(args):
             "SELECT value FROM system WHERE key='evolve_seq'"
         ).fetchone()["value"]) + 1
 
-        rows = db.execute(
+        # All active entries for output
+        all_active = db.execute(
+            "SELECT seq, type, content, topics, correction_count FROM entries "
+            "WHERE deleted=0 ORDER BY seq"
+        ).fetchall()
+
+        # Deleted entries with pending corrections
+        deleted_with_cc = db.execute(
+            "SELECT seq, type, content, topics, correction_count FROM entries "
+            "WHERE deleted=1 AND correction_count > 0 ORDER BY seq"
+        ).fetchall()
+
+        # Unmerged entries that need consolidated_seq update
+        unmerged = db.execute(
             "SELECT seq, correction_count FROM entries "
             "WHERE deleted=0 AND (consolidated_seq IS NULL OR correction_count > 0)"
         ).fetchall()
-        captured_seqs = [r["seq"] for r in rows]
-        captured_cc = {r["seq"]: r["correction_count"] for r in rows}
 
-        del_rows = db.execute(
-            "SELECT seq, correction_count FROM entries "
-            "WHERE deleted=1 AND correction_count > 0"
-        ).fetchall()
-        captured_del_seqs = [r["seq"] for r in del_rows]
-        captured_del_cc = {r["seq"]: r["correction_count"] for r in del_rows}
-
-        if not captured_seqs and not captured_del_seqs:
+        if not all_active and not deleted_with_cc:
             print("\u6ca1\u6709\u9700\u8981\u8fdb\u5316\u7684\u8bb0\u5f55")
             db.close()
             release_lock()
@@ -555,53 +548,43 @@ def cmd_evolve(args):
         if os.path.exists(pc_path):
             shutil.copy2(pc_path, os.path.join(backup_dir, "v%d.bak" % (V - 1)))
 
-        # existing content is intentionally discarded — evolve regenerates fully
-
-        new_entries = db.execute(
-            "SELECT seq, content, type, topics FROM entries WHERE seq IN (%s)" %
-            ",".join("?" * len(captured_seqs)),
-            captured_seqs,
-        ).fetchall() if captured_seqs else []
-
-        del_entries = []
-        if captured_del_seqs:
-            del_entries = db.execute(
-                "SELECT seq, content, type, topics FROM entries WHERE seq IN (%s)" %
-                ",".join("?" * len(captured_del_seqs)),
-                captured_del_seqs,
-            ).fetchall()
-
+        # Write ALL active entries (preserving consolidated ones)
         out = "<!-- evolve_seq: %d -->\n\n# \u9879\u76ee\u4e0a\u4e0b\u6587\n\n" % V
-        for e in new_entries:
-            tag = " [user_correction]" if captured_cc.get(e["seq"], 0) > 0 else ""
+        for e in all_active:
+            tag = " [user_correction]" if e["correction_count"] > 0 else ""
             out += "- seq=%d [%s%s]: %s\n" % (e["seq"], e["type"], tag, e["content"])
-        if del_entries:
+
+        if deleted_with_cc:
             out += "\n## \u5df2\u5220\u9664\n\n"
-            for e in del_entries:
+            for e in deleted_with_cc:
                 out += "- seq=%d: ~~%s~~\n" % (e["seq"], e["content"])
 
         tmp = pc_path + ".tmp"
         with open(tmp, "w") as f:
             f.write(out)
 
+        # Only mark newly unmerged entries as consolidated
+        cc_map = {r["seq"]: r["correction_count"] for r in unmerged}
         db.execute("BEGIN")
-        for seq in captured_seqs:
+        for seq, cc in cc_map.items():
             db.execute(
                 "UPDATE entries SET consolidated_seq=?, correction_count=0 "
                 "WHERE seq=? AND correction_count=?",
-                (V, seq, captured_cc.get(seq, 0)),
+                (V, seq, cc),
             )
-        for seq in captured_del_seqs:
+        for e in deleted_with_cc:
             db.execute(
-                "UPDATE entries SET correction_count=0 WHERE seq=? AND correction_count=?",
-                (seq, captured_del_cc.get(seq, 0)),
+                "UPDATE entries SET correction_count=0 WHERE seq=?",
+                (e["seq"],),
             )
         db.execute(
             "INSERT OR REPLACE INTO system(key, value, updated) "
             "VALUES('evolve_seq', ?, datetime('now'))",
             (str(V),),
         )
-        db.execute("UPDATE system SET value = CAST(value AS INTEGER) + 1 WHERE key='total_evolves'")
+        db.execute(
+            "UPDATE system SET value = CAST(value AS INTEGER) + 1 WHERE key='total_evolves'"
+        )
         db.commit()
         os.rename(tmp, pc_path)
         print("\u2713 \u8fdb\u5316\u5b8c\u6210 (V=%d)" % V)
@@ -609,11 +592,24 @@ def cmd_evolve(args):
         # Auto-sync vector index after evolve
         if embed.is_available():
             unindexed = db.execute(
-                "SELECT count(*) FROM entries e LEFT JOIN entries_vec v ON e.seq=v.seq WHERE e.deleted=0 AND v.seq IS NULL"
+                "SELECT count(*) FROM entries e LEFT JOIN entries_vec v "
+                "ON e.seq=v.seq WHERE e.deleted=0 AND v.seq IS NULL"
             ).fetchone()[0]
             if unindexed > 0:
                 print("\u5411\u91cf\u7d22\u5f15\u540c\u6b65\u4e2d...")
                 _vec_rebuild(db)
+
+        # Backup retention: keep last 10 v{N}.bak files
+        if os.path.exists(backup_dir):
+            bak_files = []
+            for fn in os.listdir(backup_dir):
+                m = re.match(r'v(\d+)\.bak', fn)
+                if m:
+                    bak_files.append((int(m.group(1)), fn))
+            bak_files.sort(key=lambda x: -x[0])  # newest first
+            for ver, fn in bak_files[10:]:
+                os.remove(os.path.join(backup_dir, fn))
+                print("  \u6e05\u7406\u65e7\u5907\u4efd: %s" % fn)
 
         db.close()
     finally:
@@ -725,25 +721,46 @@ tags: [%s]
 
 
 def cmd_status(args):
-    """Show system health dashboard."""
+    """Show system health dashboard with DB size and backup info."""
     db = init_db()
 
     total = db.execute("SELECT count(*) FROM entries").fetchone()[0]
     active = db.execute("SELECT count(*) FROM entries WHERE deleted=0").fetchone()[0]
     deleted = db.execute("SELECT count(*) FROM entries WHERE deleted=1").fetchone()[0]
-    unmerged = db.execute("SELECT count(*) FROM entries WHERE deleted=0 AND (consolidated_seq IS NULL OR correction_count>0)").fetchone()[0]
+    unmerged = db.execute(
+        "SELECT count(*) FROM entries WHERE deleted=0 "
+        "AND (consolidated_seq IS NULL OR correction_count>0)"
+    ).fetchone()[0]
 
     es = db.execute("SELECT value FROM system WHERE key='evolve_seq'").fetchone()["value"]
     ta = db.execute("SELECT value FROM system WHERE key='total_adds'").fetchone()["value"]
     tc = db.execute("SELECT value FROM system WHERE key='total_corrections'").fetchone()["value"]
     te = db.execute("SELECT value FROM system WHERE key='total_evolves'").fetchone()["value"]
 
+    # DB file size (human-readable)
+    try:
+        size_bytes = os.path.getsize(DB_PATH)
+        if size_bytes < 1024:
+            size_str = "%d B" % size_bytes
+        elif size_bytes < 1024 * 1024:
+            size_str = "%.1f KB" % (size_bytes / 1024)
+        else:
+            size_str = "%.1f MB" % (size_bytes / (1024 * 1024))
+    except OSError:
+        size_str = "?"
+
+    # Count only v{N}.bak backup files
     bd = os.path.join(MEMORY_DIR, ".backup")
-    backups = len(os.listdir(bd)) if os.path.exists(bd) else 0
+    backups = 0
+    if os.path.exists(bd):
+        for fn in os.listdir(bd):
+            if re.match(r'v(\d+)\.bak', fn):
+                backups += 1
     vc = db.execute("SELECT count(*) FROM entries_vec").fetchone()[0]
 
     print("\U0001f4ca \u8bb0\u5fc6\u7cfb\u7edf\u72b6\u6001")
-    print("  \u603b\u8bb0\u5f55: %d | \u6709\u6548: %d | \u672a\u5408\u5e76: %d | \u5df2\u5220\u9664: %d" % (total, active, unmerged, deleted))
+    print("  \u603b\u8bb0\u5f55: %d | \u6709\u6548: %d | \u672a\u5408\u5e76: %d | \u5df2\u5220\u9664: %d | \u5927\u5c0f: %s" % (
+        total, active, unmerged, deleted, size_str))
     print("\U0001f4c8 \u8fdb\u5316\u8ffd\u8e2a")
     print("  \u7248\u672c: v%s | \u5386\u53f2\u7248\u672c: %d \u4e2a" % (es, backups))
     print("  \u7d2f\u8ba1: %s adds / %s corrections / %s evolves" % (ta, tc, te))
@@ -852,6 +869,212 @@ def cmd_migrate(args):
     return 0
 
 
+def cmd_entity(args):
+    """Dispatch entity subcommands."""
+    sub = getattr(args, "entity_cmd", None)
+    if sub == "add":
+        return cmd_entity_add(args)
+    elif sub == "list":
+        return cmd_entity_list(args)
+    else:
+        print("✗ 未知实体子命令: %s" % sub)
+        return 1
+
+
+def cmd_belief(args):
+    """Dispatch belief subcommands."""
+    sub = getattr(args, "belief_cmd", None)
+    if sub == "add":
+        return cmd_belief_add(args)
+    elif sub == "list":
+        return cmd_belief_list(args)
+    else:
+        print("✗ 未知信念子命令: %s" % sub)
+        return 1
+
+
+def cmd_relation(args):
+    """Dispatch relation subcommands."""
+    sub = getattr(args, "relation_cmd", None)
+    if sub == "add":
+        return cmd_relation_add(args)
+    elif sub == "list":
+        return cmd_relation_list(args)
+    else:
+        print("✗ 未知关系子命令: %s" % sub)
+        return 1
+
+
+def cmd_entity_add(args):
+    """Add a new entity."""
+    db = init_db()
+    name = (args.name or "").strip()
+    if not name:
+        print("✗ 名称不能为空")
+        db.close()
+        return 1
+    etype = (args.type or "").strip()
+    if not etype:
+        print("✗ 类型不能为空")
+        db.close()
+        return 1
+    values = getattr(args, "values", None) or "[]"
+    try:
+        db.execute(
+            "INSERT INTO entities(name, type, entity_values) VALUES(?, ?, ?)",
+            (name, etype, values),
+        )
+        db.commit()
+        eid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        print(f"✓ 实体已创建 (id={eid})")
+    except sqlite3.IntegrityError:
+        existing = db.execute(
+            "SELECT id FROM entities WHERE name=? AND type=?", (name, etype)
+        ).fetchone()
+        print(f"⏭ 已存在 (id={existing['id']})")
+    db.close()
+    return 0
+
+
+def cmd_entity_list(args):
+    """List all entities."""
+    db = init_db()
+    rows = db.execute(
+        "SELECT id, name, type, entity_values, created, updated FROM entities ORDER BY id"
+    ).fetchall()
+    if not rows:
+        print("暂无实体")
+        db.close()
+        return 0
+    print("实体列表（共 %d 条）：" % len(rows))
+    for row in rows:
+        print("  [id:%d] %s (%s) | values=%s | created=%s" % (
+            row["id"], row["name"], row["type"],
+            row["entity_values"], row["created"],
+        ))
+    db.close()
+    return 0
+
+
+def cmd_belief_add(args):
+    """Add a new belief."""
+    db = init_db()
+    content = (args.content or "").strip()
+    if not content:
+        print("✗ 内容不能为空")
+        db.close()
+        return 1
+    source_seqs = getattr(args, "source_seqs", None) or "[]"
+    confidence = getattr(args, "confidence", None)
+    if confidence is None:
+        confidence = 0.5
+    if not (0.0 <= confidence <= 1.0):
+        print("✗ 置信度必须在 0.0 ~ 1.0 之间")
+        db.close()
+        return 1
+    evolve_seq = int(db.execute(
+        "SELECT value FROM system WHERE key='evolve_seq'"
+    ).fetchone()["value"])
+    db.execute(
+        "INSERT INTO beliefs(content, source_seqs, confidence, evolve_seq) VALUES(?, ?, ?, ?)",
+        (content, source_seqs, confidence, evolve_seq),
+    )
+    db.commit()
+    bid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    print(f"✓ 信念已记录 (id={bid})")
+    db.close()
+    return 0
+
+
+def cmd_belief_list(args):
+    """List all beliefs."""
+    db = init_db()
+    rows = db.execute(
+        "SELECT id, content, source_seqs, confidence, evolve_seq, previous_id, created FROM beliefs ORDER BY id"
+    ).fetchall()
+    if not rows:
+        print("暂无疑念")
+        db.close()
+        return 0
+    print("信念列表（共 %d 条）：" % len(rows))
+    for row in rows:
+        prev = f" (prev={row['previous_id']})" if row["previous_id"] else ""
+        print("  [id:%d] %.60s... | conf=%.2f | evolve=%d%s | %s" % (
+            row["id"], row["content"], row["confidence"],
+            row["evolve_seq"], prev, row["created"],
+        ))
+    db.close()
+    return 0
+
+
+def cmd_relation_add(args):
+    """Add a new relation between entities."""
+    db = init_db()
+    sid = args.subject_id
+    oid = args.object_id
+    predicate = (args.predicate or "").strip()
+    if not predicate:
+        print("✗ 谓词不能为空")
+        db.close()
+        return 1
+    subj = db.execute("SELECT id FROM entities WHERE id=?", (sid,)).fetchone()
+    if not subj:
+        print(f"✗ 主体实体不存在 (id={sid})")
+        db.close()
+        return 1
+    obj = db.execute("SELECT id FROM entities WHERE id=?", (oid,)).fetchone()
+    if not obj:
+        print(f"✗ 客体实体不存在 (id={oid})")
+        db.close()
+        return 1
+    source_seq = getattr(args, "source_seq", None)
+    if source_seq is not None:
+        entry_exists = db.execute(
+            "SELECT seq FROM entries WHERE seq=?", (source_seq,)
+        ).fetchone()
+        if not entry_exists:
+            print(f"⚠ 来源条目不存在 (seq={source_seq})，将 source_seq 设为 NULL")
+            source_seq = None
+    db.execute(
+        "INSERT INTO relations(subject_id, predicate, object_id, source_seq) VALUES(?, ?, ?, ?)",
+        (sid, predicate, oid, source_seq),
+    )
+    db.commit()
+    rid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    print(f"✓ 关系已创建 (id={rid})")
+    db.close()
+    return 0
+
+
+def cmd_relation_list(args):
+    """List all relations."""
+    db = init_db()
+    rows = db.execute(
+        """SELECT r.id, s.name AS subj_name, r.predicate,
+                  o.name AS obj_name, r.source_seq, r.created
+           FROM relations r
+           LEFT JOIN entities s ON r.subject_id = s.id
+           LEFT JOIN entities o ON r.object_id = o.id
+           ORDER BY r.id"""
+    ).fetchall()
+    if not rows:
+        print("暂无关系")
+        db.close()
+        return 0
+    print("关系列表（共 %d 条）：" % len(rows))
+    for row in rows:
+        src = f" [source: seq={row['source_seq']}]" if row["source_seq"] else ""
+        print("  [id:%d] %s --[%s]--> %s%s | %s" % (
+            row["id"], row["subj_name"] or "?",
+            row["predicate"], row["obj_name"] or "?",
+            src, row["created"],
+        ))
+    db.close()
+    return 0
+
+
+
+
 
 
 def build_parser():
@@ -937,6 +1160,34 @@ def build_parser():
 
     # migrate
     p = sub.add_parser("migrate", help="从 learnings.jsonl 导入")
+
+    # entity
+    p = sub.add_parser("entity", help="实体管理")
+    e_sub = p.add_subparsers(dest="entity_cmd")
+    ep = e_sub.add_parser("add", help="添加实体")
+    ep.add_argument("--name", required=True, help="实体名称")
+    ep.add_argument("--type", required=True, help="实体类型")
+    ep.add_argument("--values", default="[]", help="实体值 JSON 数组")
+    ep = e_sub.add_parser("list", help="列出所有实体")
+
+    # belief
+    p = sub.add_parser("belief", help="信念管理")
+    b_sub = p.add_subparsers(dest="belief_cmd")
+    bp = b_sub.add_parser("add", help="添加信念")
+    bp.add_argument("--content", required=True, help="信念内容")
+    bp.add_argument("--source-seqs", default="[]", help="来源条目序号 JSON 数组")
+    bp.add_argument("--confidence", type=float, default=0.5, help="置信度 0.0~1.0")
+    bp = b_sub.add_parser("list", help="列出所有信念")
+
+    # relation
+    p = sub.add_parser("relation", help="关系管理")
+    r_sub = p.add_subparsers(dest="relation_cmd")
+    rp = r_sub.add_parser("add", help="添加关系")
+    rp.add_argument("--subject-id", type=int, required=True, help="主体实体 ID")
+    rp.add_argument("--predicate", required=True, help="关系谓词")
+    rp.add_argument("--object-id", type=int, required=True, help="客体实体 ID")
+    rp.add_argument("--source-seq", type=int, help="来源条目序号")
+    rp = r_sub.add_parser("list", help="列出所有关系")
 
     return parser
 
@@ -1044,6 +1295,9 @@ COMMAND_DISPATCH = {
     "export": cmd_export,
     "config": cmd_config,
     "status": cmd_status,
+    "entity": cmd_entity,
+    "belief": cmd_belief,
+    "relation": cmd_relation,
     "review": cmd_review,
 }
 

@@ -22,6 +22,7 @@ class TestBuildParser(unittest.TestCase):
     EXPECTED_COMMANDS = [
         "config", "review",        "add", "search", "list", "delete", "update",
         "evolve", "load", "export", "status", "vec", "migrate",
+        "entity", "belief", "relation",
     ]
 
     def test_returns_parser(self):
@@ -154,7 +155,8 @@ class TestCommandDispatch(unittest.TestCase):
         """COMMAND_DISPATCH has all 13 entries."""
         expected = {"config", "review",
         "add", "search", "list", "delete", "update",
-                    "evolve", "load", "export", "status", "vec", "migrate"}
+                    "evolve", "load", "export", "status", "vec", "migrate",
+                    "entity", "belief", "relation"}
         self.assertCountEqual(mem.COMMAND_DISPATCH.keys(), expected)
 
     def test_add_maps_to_cmd_add(self):
