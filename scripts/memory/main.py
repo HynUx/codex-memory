@@ -548,6 +548,71 @@ def cmd_status(args):
 
 
 
+def cmd_vec(args):
+    """Manage vector embeddings."""
+    db = init_db()
+    sub = getattr(args, "vec_cmd", "status")
+    if sub == "status":
+        cnt = db.execute("SELECT count(*) FROM entries_vec").fetchone()[0]
+        total = db.execute("SELECT count(*) FROM entries WHERE deleted=0").fetchone()[0]
+        model_path = os.path.join(MEMORY_DIR, "models", "model.onnx")
+        has_model = os.path.exists(model_path)
+        print("向量状态: " + ("\u2705 \u5df2\u542f\u7528" if has_model else "\u274c \u672a\u542f\u7528"))
+        print("\u5df2\u7d22\u5f15: %d/%d \u6761" % (cnt, total))
+    elif sub == "enable":
+        print("placeholder: \u4e0b\u8f7d\u6a21\u578b\u5e76\u6784\u5efa\u7d22\u5f15")
+    elif sub == "rebuild":
+        print("placeholder: \u91cd\u5efa\u5411\u91cf\u7d22\u5f15")
+    db.close()
+    return 0
+
+
+def cmd_migrate(args):
+    """Import from legacy learnings.jsonl."""
+    jsonl_path = os.path.join(MEMORY_DIR, "learnings.jsonl")
+    if not os.path.exists(jsonl_path):
+        print("\u2717 \u672a\u627e\u5230 learnings.jsonl")
+        return 1
+    db = init_db()
+    count = 0
+    with open(jsonl_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            typ = rec.get("type", "tip")
+            if isinstance(typ, str) and typ.startswith("_"):
+                continue
+            content = rec.get("content", "")
+            topics_raw = rec.get("topics", "")
+            if isinstance(topics_raw, str):
+                topics = json.dumps(topics_raw.split(","))
+            else:
+                topics = "[]"
+            sha256 = hashlib.sha256(
+                (content + typ + topics).encode("utf-8")
+            ).hexdigest()
+            dup = db.execute(
+                "SELECT seq FROM entries WHERE sha256=? AND deleted=0", (sha256,)
+            ).fetchone()
+            if dup:
+                continue
+            db.execute(
+                "INSERT INTO entries(type, content, topics, sha256) VALUES (?, ?, ?, ?)",
+                (typ, content, topics, sha256),
+            )
+            count += 1
+    db.commit()
+    print("\u2713 \u5df2\u8fc1\u79fb %d \u6761\u8bb0\u5f55" % count)
+    db.close()
+    return 0
+
+
+
 
 def build_parser():
     """Build and return the argument parser with all subcommands."""
@@ -584,6 +649,8 @@ def build_parser():
 
 
 COMMAND_DISPATCH = {
+    "vec": cmd_vec,
+    "migrate": cmd_migrate,
     "search": cmd_search,
     "list": cmd_list,
     "delete": cmd_delete,
@@ -633,5 +700,14 @@ if __name__ == "__main__":
 
     # status
     p = sub.add_parser("status", help="\u7cfb\u7edf\u72b6\u6001\u4eea\u8868\u76d8")
+
+
+    # vec
+    p = sub.add_parser("vec", help="向量索引管理")
+    p.add_argument("vec_cmd", nargs="?", default="status",
+                   choices=["enable", "rebuild", "status"])
+
+    # migrate
+    p = sub.add_parser("migrate", help="从 learnings.jsonl 导入")
 
 
