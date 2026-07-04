@@ -72,7 +72,8 @@ python3 scripts/memory/main.py evolve
 python3 scripts/memory/main.py load
 ```
 
-**That's it.** No `pip install`, no API keys, no config files.
+**That's it.** No `pip install` (core features), no API keys, no config files.
+For semantic search, install optional dependencies: `pip install onnxruntime tokenizers` then `python3 scripts/memory/main.py vec enable`.
 
 ---
 
@@ -193,7 +194,7 @@ Each evolve run generates a numbered backup (`.backup/v1.bak`, `.backup/v2.bak`,
 
 ## Project Status
 
-All 11 CLI commands are production-ready. `vec enable` and `vec rebuild` are stubs awaiting ONNX model integration.
+9 of 11 CLI commands are production-ready. `vec enable` and `vec rebuild` require ONNX model download (`python3 -c "import embed; embed.download_model()"`) and `onnxruntime` (listed as optional dependency).
 
 ```
 Ran 88 tests in 0.188s
@@ -209,7 +210,7 @@ Pull requests are welcome. For major changes, open an issue first to discuss.
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing`)
 3. Add tests — coverage matters
-4. Run `python3 -m unittest discover -s tests -p "*.py"`
+4. Run `python3 -m unittest discover -s scripts/memory/tests -p "*.py"`
 5. Commit with clear messages
 6. Push and open a PR
 

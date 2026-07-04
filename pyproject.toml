@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68.0"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "codex-memory"
@@ -31,6 +31,10 @@ Repository = "https://github.com/HynUx/codex-memory.git"
 
 [project.scripts]
 memory = "memory.main:main"
+
+[project.optional-dependencies]
+vec = ["sentence-transformers"]
+
 
 [tool.setuptools.packages.find]
 where = ["scripts"]

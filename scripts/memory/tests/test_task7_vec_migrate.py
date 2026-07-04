@@ -50,14 +50,14 @@ class TestVec(unittest.TestCase):
         self.assertIn("向量", out)
 
     def test_vec_enable(self):
-        rc, out = self._run(mem.cmd_vec, vec_cmd="enable")
+        """vec enable downloads model and indexes entries."""
+        rc = mem.cmd_vec(Namespace(vec_cmd="enable"))
         self.assertEqual(rc, 0)
-        self.assertIn("placeholder", out)
 
     def test_vec_rebuild(self):
-        rc, out = self._run(mem.cmd_vec, vec_cmd="rebuild")
+        """vec rebuild clears and re-indexes."""
+        rc = mem.cmd_vec(Namespace(vec_cmd="rebuild"))
         self.assertEqual(rc, 0)
-        self.assertIn("placeholder", out)
 
 
 class TestMigrate(unittest.TestCase):

@@ -30,13 +30,13 @@ graph LR
 
 ```bash
 # 1. 进入项目目录
-cd /Users/zhaohui/openclaw-data/git/codex-memory
+cd codex-memory
 
 # 2. 验证运行
 python3 scripts/memory/main.py status
 
 # （可选）添加别名
-alias memory='python3 /Users/zhaohui/openclaw-data/git/codex-memory/scripts/memory/main.py'
+alias memory='python3 "\$(pwd)/scripts/memory/main.py"'
 ```
 
 **依赖**：Python 3 (>=3.10) + SQLite（stdlib）。零额外安装。

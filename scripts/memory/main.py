@@ -26,6 +26,8 @@ import os
 import sqlite3
 import sys
 import time
+import re
+import embed
 
 MEMORY_DIR = os.path.expanduser("~/.codex/memory")
 DB_PATH = os.path.join(MEMORY_DIR, "memory.db")
@@ -255,6 +257,21 @@ def cmd_search(args):
             (like, limit, offset),
         ).fetchall()
 
+    # Vector search fallback (when FTS5 + LIKE miss)
+    if not rows and embed.is_available():
+        vec_entries = db.execute(
+            "SELECT e.seq, v.vector FROM entries_vec v JOIN entries e ON v.seq = e.seq WHERE e.deleted=0"
+        ).fetchall()
+        if vec_entries:
+            results = embed.search(kw, [(r["seq"], r["vector"]) for r in vec_entries], limit)
+            if results:
+                seqs = [r[1] for r in results]
+                ph = ",".join("?" * len(seqs))
+                rows = db.execute(
+                    "SELECT seq, type, content, topics FROM entries WHERE seq IN (%s)" % ph,
+                    seqs,
+                ).fetchall()
+
     if not rows:
         print("未找到相关记忆")
         db.close()
@@ -297,7 +314,7 @@ def cmd_delete(args):
         (args.seq,),
     ).fetchone()
     if not row:
-        print("\u2717 \u672a\u627e\u5230")
+        print("✗ 未找到")
         db.close()
         return 1
     seq, cs = row["seq"], row["consolidated_seq"]
@@ -321,7 +338,7 @@ def cmd_update(args):
         (args.seq,),
     ).fetchone()
     if not row:
-        print("\u2717 \u672a\u627e\u5230")
+        print("✗ 未找到")
         db.close()
         return 1
     new_type = args.type if args.type else row["type"]
@@ -333,7 +350,7 @@ def cmd_update(args):
         (new_sha256, args.seq),
     ).fetchone()
     if dup:
-        print("\u2717 \u51b2\u7a81: \u5df2\u5b58\u5728\u76f8\u540c\u5185\u5bb9 (seq=%d)" % dup["seq"])
+        print("✗ 冲突: 已存在相同内容 (seq=%d)" % dup["seq"])
         db.close()
         return 1
     db.execute(
@@ -463,7 +480,6 @@ def cmd_evolve(args):
     finally:
         release_lock()
     return 0
-import re as _re
 
 
 def cmd_load(args):
@@ -481,7 +497,7 @@ def cmd_load(args):
         with open(pc) as f:
             text = f.read()
         ev = db.execute("SELECT value FROM system WHERE key='evolve_seq'").fetchone()["value"]
-        m = _re.search(r'<!-- evolve_seq:\s*(\d+)\s*-->', text)
+        m = re.search(r'<!-- evolve_seq:\s*(\d+)\s*-->', text)
         if m and int(m.group(1)) < int(ev):
             print("\u26a0\ufe0f project-context.md \u5df2\u8fc7\u671f\uff0c\u5efa\u8bae\u8fd0\u884c memory evolve")
         output += text + "\n"
@@ -598,29 +614,61 @@ def cmd_status(args):
 
 
 def cmd_vec(args):
-    """Manage vector embeddings."""
+    """Manage vector embeddings (BGE-small-zh via sentence-transformers)."""
     db = init_db()
     sub = getattr(args, "vec_cmd", "status")
     if sub == "status":
         cnt = db.execute("SELECT count(*) FROM entries_vec").fetchone()[0]
         total = db.execute("SELECT count(*) FROM entries WHERE deleted=0").fetchone()[0]
-        model_path = os.path.join(MEMORY_DIR, "models", "model.onnx")
-        has_model = os.path.exists(model_path)
-        print("向量状态: " + ("\u2705 \u5df2\u542f\u7528" if has_model else "\u274c \u672a\u542f\u7528"))
+        avail = embed.is_available()
+        if avail:
+            print("向量状态: \u2705 \u53ef\u7528")
+        else:
+            print("向量状态: \u274c \u672a\u542f\u7528\uff08\u9700\u5b89\u88c5: pip install sentence-transformers\uff09")
         print("\u5df2\u7d22\u5f15: %d/%d \u6761" % (cnt, total))
     elif sub == "enable":
-        print("placeholder: \u4e0b\u8f7d\u6a21\u578b\u5e76\u6784\u5efa\u7d22\u5f15")
+        if not embed.is_available():
+            print("\u2717 \u9700\u8981\u5b89\u88c5 sentence-transformers")
+            print("  pip install sentence-transformers")
+            db.close()
+            return 1
+        embed.download_model()
+        rows = db.execute("SELECT seq, content, type, topics FROM entries WHERE deleted=0").fetchall()
+        for row in rows:
+            text = "%s: %s %s" % (row["type"], row["content"], row["topics"])
+            vec = embed.embed(text)
+            db.execute(
+                "INSERT OR REPLACE INTO entries_vec(seq, vector, model) VALUES(?, ?, ?)",
+                (row["seq"], vec.tobytes(), "bge-small-zh-v1.5"),
+            )
+        db.commit()
+        print("\u2713 \u5df2\u7d22\u5f15 %d \u6761" % len(rows))
     elif sub == "rebuild":
-        print("placeholder: \u91cd\u5efa\u5411\u91cf\u7d22\u5f15")
+        db.execute("DELETE FROM entries_vec")
+        db.commit()
+        if not embed.is_available():
+            print("\u2717 \u9700\u8981\u5b89\u88c5 sentence-transformers")
+            db.close()
+            return 1
+        embed.download_model()
+        rows = db.execute("SELECT seq, content, type, topics FROM entries WHERE deleted=0").fetchall()
+        for row in rows:
+            text = "%s: %s %s" % (row["type"], row["content"], row["topics"])
+            vec = embed.embed(text)
+            db.execute(
+                "INSERT OR REPLACE INTO entries_vec(seq, vector, model) VALUES(?, ?, ?)",
+                (row["seq"], vec.tobytes(), "bge-small-zh-v1.5"),
+            )
+        db.commit()
+        print("\u2713 \u5df2\u91cd\u5efa\u7d22\u5f15: %d \u6761" % len(rows))
     db.close()
     return 0
-
 
 def cmd_migrate(args):
     """Import from legacy learnings.jsonl."""
     jsonl_path = os.path.join(MEMORY_DIR, "learnings.jsonl")
     if not os.path.exists(jsonl_path):
-        print("\u2717 \u672a\u627e\u5230 learnings.jsonl")
+        print("✗ 未找到 learnings.jsonl")
         return 1
     db = init_db()
     count = 0
