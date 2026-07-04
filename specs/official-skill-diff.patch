@@ -1,0 +1,61 @@
+6a7,8
+> 本技能已集成 codex-memory 工具，增强存储和检索能力。
+> 
+23a26
+> # 建议也运行 memory load 获取结构化知识库的补充信息
+30c33
+< 当出现以下情况时，必须将学习内容追加到 learnings.jsonl：
+---
+> 当出现以下情况时，必须将学习内容记录下来：
+38c41
+< 记录格式（必须严格使用 JSON Lines，每行一个 JSON 对象）：
+---
+> 记录格式（推荐使用 memory add，结构化存储到 SQLite）：
+41c44
+< echo '{"ts":"2026-07-04T05:20","type":"workflow","content":"具体学到了什么"}' >> /Users/zhaohui/.codex/memory/learnings.jsonl
+---
+> python3 /Users/zhaohui/openclaw-data/git/codex-memory/scripts/memory/main.py add --type workflow --content "具体学到了什么" --topics '["tag1"]'
+43a47,51
+> 如果无法使用 memory add，仍可用 echo 追加到 learnings.jsonl：
+> ```bash
+> echo '{"ts":"...","type":"workflow","content":"具体学到了什么"}' >> /Users/zhaohui/.codex/memory/learnings.jsonl
+> ```
+> 
+48c56
+< 结束时检查 learnings.jsonl 中是否有未合并的新记录：
+---
+> 结束时检查 SQLite 中是否有未合并的新记录。如果整个 session 都使用了 memory add 记录，evolve 会自动处理。但如果使用了 echo fallback，请按以下步骤手动合并：
+50,51c58,59
+< 1. **读取未合并的学习记录** — 与 project-context.md 对比，找出新增的
+< 2. **更新 project-context.md** — 如果学习内容涉及项目状态变化、新架构决策、新待办
+---
+> 1. **读取未合并的记录** — 运行 `memory list --limit 20` 查看最近记录，或 `memory review list | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'未处理: {d["count"]} 条')"`
+> 2. **运行 evolve 合并** — `memory evolve`（如果未触发自动合并）
+54,58d61
+< 更新 project-context.md 的规则：
+< - 不要删除已有内容，只追加或修改
+< - 如果某个待办已完成，把 `[ ]` 改成 `[x]`
+< - 如果有新的架构决策，追加到"架构决策"段落
+< 
+61c64
+< 每第 5 条学习记录触发一次小合并，每第 20 条触发一次大合并：
+---
+> 学习记录的合并由 codex-memory 自动处理。当 `memory add` 的未合并条目达到 10 条时，evolve 自动触发：
+63c66,68
+< **小合并**（5条）：把 learnings.jsonl 中的新知识归纳进 project-context.md
+---
+> - 零散记录全量合并到 project-context.md
+> - 自动重建向量索引（如已安装）
+> - 版本历史保留在 .backup/，可回滚
+65c70
+< **大合并**（20条）：除了更新 project-context.md，还要审查 profile.md 是否有需要更新的偏好
+---
+> 也可手动运行 memory evolve 触发合并。
+67c72
+< 用 `wc -l /Users/zhaohui/.codex/memory/learnings.jsonl` 检查当前记录数，判断是否需要触发合并。
+---
+> profile.md 的更新按照下方规则手动处理，不受 evolve 影响。
+71c76
+< - 只通过 Bash 读写文件，不使用其他工具
+---
+> - 推荐使用 memory add 命令（结构化记录 + 自动去重），也可用 echo 追加 jsonl

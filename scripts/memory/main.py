@@ -160,6 +160,41 @@ CREATE TABLE IF NOT EXISTS beliefs (
 # ---- Database ---------------------------------------------------------------
 
 
+def _run_migrations(db):
+    """Run schema migrations based on PRAGMA user_version.
+
+    Each migration checks current version and applies incremental
+    changes, then increments user_version.  New databases start at
+    version 0 (no version set) and are migrated forward to the latest.
+    """
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+
+    if version < 2:
+        db.execute(
+            "ALTER TABLE entries ADD COLUMN llm_processed_at TEXT DEFAULT NULL"
+        )
+        db.execute("PRAGMA user_version = 2")
+
+
+def _run_migrations(db):
+    """Run schema migrations based on PRAGMA user_version.
+
+    Each migration checks current version and applies incremental
+    changes, then increments user_version.  All migrations are
+    designed to be idempotent (safe to re-apply).
+    """
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+
+    if version < 2:
+        try:
+            db.execute(
+                "ALTER TABLE entries ADD COLUMN llm_processed_at TEXT DEFAULT NULL"
+            )
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        db.execute("PRAGMA user_version = 2")
+
+
 def init_db():
     """Open or create memory.db, returning a database connection.
 
@@ -171,10 +206,7 @@ def init_db():
     db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
     db.executescript(SCHEMA_SQL)
-    try:
-        db.execute("ALTER TABLE entries ADD COLUMN llm_processed_at TEXT DEFAULT NULL")
-    except Exception:
-        pass  # column already exists
+    _run_migrations(db)
     seeds = [
         ("schema_version", "1"),
         ("evolve_seq", "0"),

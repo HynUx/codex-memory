@@ -109,5 +109,40 @@ class TestInitDB(unittest.TestCase):
         self.assertTrue(len(info) > 0 and info[0]["on_delete"] == "CASCADE")
 
 
+
+class TestMigrations(unittest.TestCase):
+    """Test schema migration framework."""
+
+    def test_user_version(self):
+        """Fresh database starts at user_version >= 2."""
+        import sqlite3, os, tempfile
+        td = tempfile.mkdtemp()
+        mem.MEMORY_DIR = td
+        mem.DB_PATH = os.path.join(td, "m.db")
+        db = mem.init_db()
+        ver = db.execute("PRAGMA user_version").fetchone()[0]
+        self.assertGreaterEqual(ver, 2)
+        db.close()
+        shutil.rmtree(td, ignore_errors=True)
+
+    def test_migration_v1_to_v2(self):
+        """Migration from v1 adds llm_processed_at and sets version."""
+        import sqlite3, os, tempfile
+        td = tempfile.mkdtemp()
+        path = os.path.join(td, "migrate.db")
+        db = sqlite3.connect(path)
+        db.row_factory = sqlite3.Row
+        db.executescript(mem.SCHEMA_SQL)
+        db.execute("PRAGMA user_version = 1")
+        cols = [r["name"] for r in db.execute("PRAGMA table_info(entries)")]
+        self.assertNotIn("llm_processed_at", cols)
+        mem._run_migrations(db)
+        cols = [r["name"] for r in db.execute("PRAGMA table_info(entries)")]
+        self.assertIn("llm_processed_at", cols)
+        ver = db.execute("PRAGMA user_version").fetchone()[0]
+        self.assertGreaterEqual(ver, 2)
+        db.close()
+        shutil.rmtree(td, ignore_errors=True)
+
 if __name__ == "__main__":
     unittest.main()
