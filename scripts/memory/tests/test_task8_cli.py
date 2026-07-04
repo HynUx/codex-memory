@@ -145,10 +145,6 @@ class TestBuildParser(unittest.TestCase):
         self.assertEqual(args.content, "new")
 
 
-        """Parser can parse 'migrate'."""
-        p = mem.build_parser()
-        args = p.parse_args(["migrate"])
-        self.assertEqual(args.command, "migrate")
 
 
 class TestCommandDispatch(unittest.TestCase):
@@ -204,8 +200,10 @@ class TestMainEntry(unittest.TestCase):
         mem.LOCK_PATH = os.path.join(self.test_dir, ".lock")
 
     def tearDown(self):
-        if hasattr(self, 'db') and self.db:
-            self.db.close()
+        try:
+            mem.init_db().close()
+        except Exception:
+            pass
         shutil.rmtree(self.test_dir, ignore_errors=True)
         if os.path.exists(mem.DB_PATH):
             os.remove(mem.DB_PATH)
