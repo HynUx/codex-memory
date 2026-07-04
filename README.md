@@ -6,7 +6,7 @@
   <p>
     <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-    <img src="https://img.shields.io/badge/tests-108%20passing-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/tests-154%20passing-brightgreen" alt="Tests">
     <img src="https://img.shields.io/badge/dependencies-core%2Boptional-important" alt="Core: zero deps / Vec: optional">
   </p>
 </div>
@@ -43,12 +43,14 @@ Codex Memory solves this with a **zero-dependency, file-based approach**:
 | 🗂️ **Persistent SQLite storage** | WAL-mode database survives crashes and powers concurrent access |
 | 🔍 **Full-text search** | FTS5 indexes every record for instant keyword search |
 | 🧬 **Knowledge evolution** | `evolve` consolidates scattered records into a structured `project-context.md` |
-| 🔄 **Auto-evolution** | Unmerged records ≥ 20 → automatic `evolve` on `add` |
+| 🧠 **Structured knowledge** | Entity/belief/relation CLI for semantic knowledge graph building |
+| 🔄 **Auto-evolution** | Unmerged records ≥ threshold (default 10) → automatic `evolve` on `add` |
 | ✏️ **Correction propagation** | Edit or delete any record; next `evolve` propagates the change |
-| 📦 **Versioned rollback** | Every `evolve` creates a backup in `.backup/v{N}.bak` |
+| 📦 **Versioned rollback** | Every `evolve` creates a backup in `.backup/v{N}.bak` (keep last 10) |
 | 📚 **Obsidian-compatible export** | `export` generates standalone `.md` files with YAML frontmatter |
 | 🔌 **Semantic vector search** | BGE-small-zh-v1.5 embeddings (sentence-transformers) for semantic retrieval |
 | 🔒 **Concurrent-safe** | WAL + `fcntl` file lock allow multiple agents to write safely |
+| 🔍 **Review pipeline** | `review list` outputs JSON for LLM-driven analysis and knowledge extraction |
 
 ---
 
@@ -125,6 +127,9 @@ Copy `SKILL.md` to your Codex skills directory or reference it from your project
 | `review` | Analyze unprocessed | `memory review list` |
 | `vec` | Vector index management | `memory vec status` |
 | `migrate` | Import legacy data | `memory migrate` |
+| `entity` | Entity management | `memory entity add --name "Project" --type project` |
+| `belief` | Belief management | `memory belief add --content "conclusion" --source-seqs '[1]'` |
+| `relation` | Relation management | `memory relation add --subject-id 1 --predicate "uses" --object-id 2` |
 
 For detailed docs: `memory <command> --help`.
 
@@ -203,7 +208,7 @@ Each evolve run generates a numbered backup (`.backup/v1.bak`, `.backup/v2.bak`,
 All 11 CLI commands are production-ready. Vector indexing and semantic search require `sentence-transformers` (`python3 -c "import embed; embed.download_model()"`) and `onnxruntime` (listed as optional dependency).
 
 ```
-Ran 108 tests in 4.5s
+Ran 154 tests in 4.1s
 OK
 ```
 
