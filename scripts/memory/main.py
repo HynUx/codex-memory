@@ -138,6 +138,37 @@ def init_db():
     return db
 
 
+# ---- Config ----------------------------------------------------------------
+
+
+def load_config():
+    """Load config.toml, return dict with defaults for missing keys."""
+    cfg = {
+        "auto_evolve_enabled": True,
+        "auto_evolve_threshold": 20,
+        "suggest_threshold": 10,
+    }
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, val = line.split("=", 1)
+                    key = key.strip()
+                    val = val.strip()
+                    if val.lower() in ("true", "false"):
+                        cfg[key] = val.lower() == "true"
+                    elif val.isdigit():
+                        cfg[key] = int(val)
+                    else:
+                        cfg[key] = val.strip("'\"")
+        except (OSError, ValueError):
+            pass
+    return cfg
+
+
 # ---- Commands ---------------------------------------------------------------
 
 
@@ -182,6 +213,21 @@ def cmd_add(args):
         "SELECT seq FROM entries WHERE sha256 = ?", (sha256,),
     ).fetchone()["seq"]
     print(f"✓ 已记录 (seq={seq})")
+
+    # Auto-evolve trigger
+    if not getattr(args, 'no_evolve', False):
+        cfg = load_config()
+        if cfg.get("auto_evolve_enabled", True):
+            unmerged = db.execute(
+                "SELECT count(*) FROM entries WHERE deleted=0 AND (consolidated_seq IS NULL OR correction_count>0)"
+            ).fetchone()[0]
+            threshold = cfg.get("auto_evolve_threshold", 20)
+            if unmerged >= threshold:
+                db.close()
+                print("触发自动进化...")
+                cmd_evolve(None)
+                return 0
+
     db.close()
     return 0
 
@@ -360,7 +406,7 @@ def cmd_evolve(args):
         if os.path.exists(pc_path):
             shutil.copy2(pc_path, os.path.join(backup_dir, "v%d.bak" % (V - 1)))
 
-        existing = open(pc_path).read() if os.path.exists(pc_path) else ""
+        # existing content is intentionally discarded — evolve regenerates fully
 
         new_entries = db.execute(
             "SELECT seq, content, type, topics FROM entries WHERE seq IN (%s)" %
