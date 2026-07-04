@@ -414,6 +414,139 @@ def cmd_evolve(args):
     finally:
         release_lock()
     return 0
+import re as _re
+
+
+def cmd_load(args):
+    """Load memory context for session start."""
+    db = init_db()
+    output = ""
+
+    pf = os.path.join(MEMORY_DIR, "profile.md")
+    if os.path.exists(pf):
+        with open(pf) as f:
+            output += f.read() + "\n"
+
+    pc = os.path.join(MEMORY_DIR, "project-context.md")
+    if os.path.exists(pc):
+        with open(pc) as f:
+            text = f.read()
+        ev = db.execute("SELECT value FROM system WHERE key='evolve_seq'").fetchone()["value"]
+        m = _re.search(r'<!-- evolve_seq:\s*(\d+)\s*-->', text)
+        if m and int(m.group(1)) < int(ev):
+            print("\u26a0\ufe0f project-context.md \u5df2\u8fc7\u671f\uff0c\u5efa\u8bae\u8fd0\u884c memory evolve")
+        output += text + "\n"
+
+    recent = db.execute(
+        "SELECT seq, type, content, topics FROM entries WHERE deleted=0 ORDER BY seq DESC LIMIT ?",
+        (getattr(args, "limit", 10),),
+    ).fetchall()
+    if recent:
+        output += "## \u6700\u8fd1\u5b66\u4e60\n"
+        for row in recent:
+            output += "- [seq:%d] %s | %.80s...\n" % (row["seq"], row["type"], row["content"])
+
+    unmerged = db.execute(
+        "SELECT count(*) FROM entries WHERE deleted=0 AND (consolidated_seq IS NULL OR correction_count>0)"
+    ).fetchone()[0]
+    if unmerged >= 10:
+        print("\u26a0\ufe0f %d \u6761\u672a\u5408\u5e76\uff0c\u8fd0\u884c memory evolve \u66f4\u65b0" % unmerged)
+
+    if len(output) > 12000:
+        output = output[:12000] + "\n...\uff08\u622a\u65ad\uff09"
+
+    print(output)
+    db.close()
+    return 0
+
+
+def cmd_export(args):
+    """Export memories to Obsidian-compatible markdown files."""
+    db = init_db()
+    export_dir = getattr(args, "dir", os.path.join(MEMORY_DIR, "export"))
+    if os.path.exists(export_dir):
+        shutil.rmtree(export_dir)
+    os.makedirs(export_dir)
+
+    rows = db.execute(
+        "SELECT seq, created, type, content, topics FROM entries WHERE deleted=0 ORDER BY seq"
+    ).fetchall()
+
+    for row in rows:
+        seq, typ, text = row["seq"], row["type"], row["content"]
+        created, topics = row["created"], row["topics"]
+        safe = typ.replace(" ", "-").replace("/", "_")
+        fn = "seq-%04d-%s.md" % (seq, safe)
+        tags = []
+        if topics and topics != "[]":
+            tags = [t.strip().strip('"') for t in topics.strip("[]").split(",")]
+        tag_str = ", ".join(t for t in tags)
+
+        md = """---
+seq: %d
+type: %s
+topics: %s
+created: %s
+tags: [%s]
+---
+
+# %.60s
+
+%s
+
+---
+*Source: memory.db | \u5bfc\u51fa: %s*
+""" % (seq, typ, topics, created, tag_str, text, text, time.strftime("%Y-%m-%d %H:%M"))
+
+        with open(os.path.join(export_dir, fn), "w") as f:
+            f.write(md)
+
+    with open(os.path.join(export_dir, "_index.md"), "w") as f:
+        f.write("""# \u8bb0\u5fc6\u4eea\u8868\u76d8
+
+\u5bfc\u51fa\u65f6\u95f4: %s
+
+\u603b\u8bb0\u5f55: %d
+
+\u6587\u4ef6\u6570: %d
+""" % (time.strftime("%Y-%m-%d %H:%M"), len(rows), len(rows)))
+
+    print("\u2713 \u5df2\u5bfc\u51fa %d \u6761\u5230 %s" % (len(rows), export_dir))
+    db.close()
+    return 0
+
+
+def cmd_status(args):
+    """Show system health dashboard."""
+    db = init_db()
+
+    total = db.execute("SELECT count(*) FROM entries").fetchone()[0]
+    active = db.execute("SELECT count(*) FROM entries WHERE deleted=0").fetchone()[0]
+    deleted = db.execute("SELECT count(*) FROM entries WHERE deleted=1").fetchone()[0]
+    unmerged = db.execute("SELECT count(*) FROM entries WHERE deleted=0 AND (consolidated_seq IS NULL OR correction_count>0)").fetchone()[0]
+
+    es = db.execute("SELECT value FROM system WHERE key='evolve_seq'").fetchone()["value"]
+    ta = db.execute("SELECT value FROM system WHERE key='total_adds'").fetchone()["value"]
+    tc = db.execute("SELECT value FROM system WHERE key='total_corrections'").fetchone()["value"]
+    te = db.execute("SELECT value FROM system WHERE key='total_evolves'").fetchone()["value"]
+
+    bd = os.path.join(MEMORY_DIR, ".backup")
+    backups = len(os.listdir(bd)) if os.path.exists(bd) else 0
+    vc = db.execute("SELECT count(*) FROM entries_vec").fetchone()[0]
+
+    print("\U0001f4ca \u8bb0\u5fc6\u7cfb\u7edf\u72b6\u6001")
+    print("  \u603b\u8bb0\u5f55: %d | \u6709\u6548: %d | \u672a\u5408\u5e76: %d | \u5df2\u5220\u9664: %d" % (total, active, unmerged, deleted))
+    print("\U0001f4c8 \u8fdb\u5316\u8ffd\u8e2a")
+    print("  \u7248\u672c: v%s | \u5386\u53f2\u7248\u672c: %d \u4e2a" % (es, backups))
+    print("  \u7d2f\u8ba1: %s adds / %s corrections / %s evolves" % (ta, tc, te))
+    print("\U0001f50d \u641c\u7d22")
+    print("  FTS5: \u2705 | \u5411\u91cf: %s (%d/%d \u5df2\u7d22\u5f15)" % (
+        "\u2705" if vc > 0 else "\u274c (\u672a\u542f\u7528)", vc, active))
+
+    db.close()
+    return 0
+
+
 
 
 def build_parser():
@@ -479,4 +612,26 @@ def main():
 if __name__ == "__main__":
     main()    # evolve
     p = sub.add_parser("evolve", help="\u5408\u5e76\u8bb0\u5fc6\u5230 project-context.md")
+    # load
+    p = sub.add_parser("load", help="\u52a0\u8f7d\u8bb0\u5fc6\u4e0a\u4e0b\u6587")
+    p.add_argument("--limit", type=int, default=10)
+
+    # export
+    p = sub.add_parser("export", help="\u5bfc\u51fa Obsidian \u517c\u5bb9 Markdown")
+    p.add_argument("--dir", help="\u5bfc\u51fa\u76ee\u5f55")
+
+    # status
+    p = sub.add_parser("status", help="\u7cfb\u7edf\u72b6\u6001\u4eea\u8868\u76d8")
+
+    # load
+    p = sub.add_parser("load", help="\u52a0\u8f7d\u8bb0\u5fc6\u4e0a\u4e0b\u6587")
+    p.add_argument("--limit", type=int, default=10)
+
+    # export
+    p = sub.add_parser("export", help="\u5bfc\u51fa Obsidian \u517c\u5bb9 Markdown")
+    p.add_argument("--dir", help="\u5bfc\u51fa\u76ee\u5f55")
+
+    # status
+    p = sub.add_parser("status", help="\u7cfb\u7edf\u72b6\u6001\u4eea\u8868\u76d8")
+
 
