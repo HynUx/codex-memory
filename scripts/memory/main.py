@@ -239,6 +239,71 @@ def cmd_list(args):
     return 0
 
 
+
+def cmd_delete(args):
+    """Soft-delete a memory entry by seq."""
+    db = init_db()
+    row = db.execute(
+        "SELECT seq, consolidated_seq FROM entries WHERE seq=? AND deleted=0",
+        (args.seq,),
+    ).fetchone()
+    if not row:
+        print("\u2717 \u672a\u627e\u5230")
+        db.close()
+        return 1
+    seq, cs = row["seq"], row["consolidated_seq"]
+    db.execute("UPDATE entries SET deleted=1 WHERE seq=?", (seq,))
+    if cs is not None:
+        db.execute("UPDATE entries SET correction_count = correction_count + 1 WHERE seq=?", (seq,))
+        db.execute(
+            "UPDATE system SET value = CAST(value AS INTEGER) + 1 WHERE key='total_corrections'"
+        )
+    db.commit()
+    print("\u2713 \u5df2\u5220\u9664 (seq=%d)" % seq)
+    db.close()
+    return 0
+
+
+def cmd_update(args):
+    """Update a memory entry by seq. Supports partial field updates."""
+    db = init_db()
+    row = db.execute(
+        "SELECT seq, consolidated_seq, type, content, topics FROM entries WHERE seq=? AND deleted=0",
+        (args.seq,),
+    ).fetchone()
+    if not row:
+        print("\u2717 \u672a\u627e\u5230")
+        db.close()
+        return 1
+    new_type = args.type if args.type else row["type"]
+    new_content = args.content if args.content else row["content"]
+    new_topics = args.topics if args.topics else row["topics"]
+    new_sha256 = hashlib.sha256((new_content + new_type + new_topics).encode("utf-8")).hexdigest()
+    dup = db.execute(
+        "SELECT seq FROM entries WHERE sha256=? AND deleted=0 AND seq!=?",
+        (new_sha256, args.seq),
+    ).fetchone()
+    if dup:
+        print("\u2717 \u51b2\u7a81: \u5df2\u5b58\u5728\u76f8\u540c\u5185\u5bb9 (seq=%d)" % dup["seq"])
+        db.close()
+        return 1
+    db.execute(
+        "UPDATE entries SET type=?, content=?, topics=?, sha256=? WHERE seq=?",
+        (new_type, new_content, new_topics, new_sha256, args.seq),
+    )
+    if row["consolidated_seq"] is not None:
+        db.execute(
+            "UPDATE entries SET correction_count = correction_count + 1 WHERE seq=?",
+            (args.seq,),
+        )
+        db.execute(
+            "UPDATE system SET value = CAST(value AS INTEGER) + 1 WHERE key='total_corrections'"
+        )
+    db.commit()
+    print("\u2713 \u5df2\u66f4\u65b0 (seq=%d)" % args.seq)
+    db.close()
+    return 0
+
 def build_parser():
     """Build and return the argument parser with all subcommands."""
     parser = argparse.ArgumentParser(prog="memory")
@@ -276,6 +341,8 @@ def build_parser():
 COMMAND_DISPATCH = {
     "search": cmd_search,
     "list": cmd_list,
+    "delete": cmd_delete,
+    "update": cmd_update,
     "add": cmd_add,
 }
 
