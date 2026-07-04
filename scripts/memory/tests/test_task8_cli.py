@@ -9,7 +9,7 @@ Covers:
 """
 
 import sys, os, tempfile, shutil, unittest, argparse
-from argparse import Namespace, ArgumentParser
+from argparse import ArgumentParser
 from io import StringIO
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -20,8 +20,8 @@ class TestBuildParser(unittest.TestCase):
     """build_parser() must return a complete ArgumentParser with all subcommands."""
 
     EXPECTED_COMMANDS = [
-        "add", "search", "list", "evolve", "load",
-        "export", "status", "vec", "migrate",
+        "add", "search", "list", "delete", "update",
+        "evolve", "load", "export", "status", "vec", "migrate",
     ]
 
     def test_returns_parser(self):
@@ -129,12 +129,33 @@ class TestBuildParser(unittest.TestCase):
         args = p.parse_args(["migrate"])
         self.assertEqual(args.command, "migrate")
 
+    def test_parser_parse_delete(self):
+        """Parser can parse 'delete 42'."""
+        p = mem.build_parser()
+        args = p.parse_args(["delete", "42"])
+        self.assertEqual(args.command, "delete")
+        self.assertEqual(args.seq, 42)
+
+    def test_parser_parse_update(self):
+        """Parser can parse 'update 5 --content new'."""
+        p = mem.build_parser()
+        args = p.parse_args(["update", "5", "--content", "new"])
+        self.assertEqual(args.command, "update")
+        self.assertEqual(args.seq, 5)
+        self.assertEqual(args.content, "new")
+
+
+        """Parser can parse 'migrate'."""
+        p = mem.build_parser()
+        args = p.parse_args(["migrate"])
+        self.assertEqual(args.command, "migrate")
+
 
 class TestCommandDispatch(unittest.TestCase):
     """COMMAND_DISPATCH must map all 9 commands to correct handler functions."""
 
     def test_all_commands_mapped(self):
-        """COMMAND_DISPATCH has all 9 entries."""
+        """COMMAND_DISPATCH has all 11 entries."""
         expected = {"add", "search", "list", "delete", "update",
                     "evolve", "load", "export", "status", "vec", "migrate"}
         self.assertCountEqual(mem.COMMAND_DISPATCH.keys(), expected)
@@ -167,6 +188,12 @@ class TestCommandDispatch(unittest.TestCase):
         self.assertIs(mem.COMMAND_DISPATCH["migrate"], mem.cmd_migrate)
 
 
+    def test_delete_maps_to_cmd_delete(self):
+        self.assertIs(mem.COMMAND_DISPATCH["delete"], mem.cmd_delete)
+
+    def test_update_maps_to_cmd_update(self):
+        self.assertIs(mem.COMMAND_DISPATCH["update"], mem.cmd_update)
+
 class TestMainEntry(unittest.TestCase):
     """main() entry point dispatch logic."""
 
@@ -177,6 +204,8 @@ class TestMainEntry(unittest.TestCase):
         mem.LOCK_PATH = os.path.join(self.test_dir, ".lock")
 
     def tearDown(self):
+        if hasattr(self, 'db') and self.db:
+            self.db.close()
         shutil.rmtree(self.test_dir, ignore_errors=True)
         if os.path.exists(mem.DB_PATH):
             os.remove(mem.DB_PATH)

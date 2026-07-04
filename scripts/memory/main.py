@@ -646,6 +646,18 @@ def build_parser():
     # list
     p = sub.add_parser("list", help="浏览记忆")
     p.add_argument("--limit", type=int, default=10)
+
+    # delete
+    p = sub.add_parser("delete", help="软删除一条记忆")
+    p.add_argument("seq", type=int, help="要删除的记录序号")
+
+    # update
+    p = sub.add_parser("update", help="更新一条记忆")
+    p.add_argument("seq", type=int, help="要更新的记录序号")
+    p.add_argument("--content", help="新内容")
+    p.add_argument("--type", help="新类型")
+    p.add_argument("--topics", help="新标签")
+
     # evolve
     p = sub.add_parser("evolve", help="合并记忆到 project-context.md")
 
