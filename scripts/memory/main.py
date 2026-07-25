@@ -657,9 +657,18 @@ def cmd_evolve(args):
 
 
 def cmd_load(args):
-    """Load memory context for session start."""
+    """Load memory context for session start.
+
+    Outputs SOP first, then knowledge base (profile + project-context + recent).
+    """
     db = init_db()
     output = ""
+
+    # Inject SOP from AGENTS.md first
+    agents_md = os.path.expanduser("~/.codex/AGENTS.md")
+    if os.path.exists(agents_md):
+        with open(agents_md) as fh:
+            output += fh.read() + "\n---\n\n"
 
     pf = os.path.join(MEMORY_DIR, "profile.md")
     if os.path.exists(pf):
