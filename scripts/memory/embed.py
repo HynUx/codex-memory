@@ -109,9 +109,13 @@ def search(query, entries, limit=5):
 
 # ---- FAISS vector index -----------------------------------------------
 
-import faiss as _faiss
 
 FAISS_INDEX_FILE = "vector.faiss"
+
+def _get_faiss():
+    """Lazy-import faiss so embed.py works without faiss-cpu installed."""
+    import faiss
+    return faiss
 
 
 def _get_faiss_path():
@@ -137,11 +141,11 @@ def build_faiss_index(db):
         vectors[i] = np.frombuffer(bytes(row["vector"]), dtype=np.float32)
         seqs[i]    = row["seq"]
 
-    index = _faiss.IndexIDMap(_faiss.IndexFlatIP(vectors.shape[1]))
+    index = _get_faiss().IndexIDMap(_get_faiss().IndexFlatIP(vectors.shape[1]))
     index.add_with_ids(vectors, seqs)
 
     path = _get_faiss_path()
-    _faiss.write_index(index, path)
+    _get_faiss().write_index(index, path)
     return index
 
 
@@ -150,7 +154,7 @@ def load_faiss_index():
     path = _get_faiss_path()
     if not os.path.exists(path):
         return None
-    return _faiss.read_index(path)
+    return _get_faiss().read_index(path)
 
 
 def vector_search(query, db, limit=10):
