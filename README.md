@@ -1,12 +1,12 @@
 <div align="center">
   <h1>🧠 Codex Memory</h1>
   <p><strong>Persistent, evolving memory for AI agents</strong></p>
-  <p>SQLite-backed · Zero external dependencies · Auto-evolution · Obsidian-compatible export</p>
+  <p>SQLite-backed · Minimal dependencies (core: stdlib only) · Auto-evolution · Obsidian-compatible export</p>
 
   <p>
     <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-    <img src="https://img.shields.io/badge/tests-154%20passing-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/tests-187%20passing-brightgreen" alt="Tests">
     <img src="https://img.shields.io/badge/dependencies-core%2Boptional-important" alt="Core: zero deps / Vec: optional">
   </p>
 </div>
@@ -50,6 +50,8 @@ Codex Memory solves this with a **zero-dependency, file-based approach**:
 | 📚 **Obsidian-compatible export** | `export` generates standalone `.md` files with YAML frontmatter |
 | 🔌 **Semantic vector search** | BGE-small-zh-v1.5 embeddings (sentence-transformers) for semantic retrieval |
 | 🔒 **Concurrent-safe** | WAL + `fcntl` file lock allow multiple agents to write safely |
+| 🔒 **Concurrent-safe** | WAL + `fcntl` file lock allow multiple agents to write safely |
+| 🇨🇳 **Chinese text search** | jieba segmentation + FTS5 + LIKE + Vector three-layer chain |
 | 🔍 **Review pipeline** | `review list` outputs JSON for LLM-driven analysis and knowledge extraction |
 
 ---
@@ -75,9 +77,9 @@ python3 scripts/memory/main.py load
 ```
 
 **That's it.** Core features use only Python stdlib — no `pip install`, no API keys, no config files.
-For semantic search (recommended):
+For Chinese search and semantic search (recommended):
 ```bash
-pip install sentence-transformers
+pip install sentence-transformers jieba
 python3 scripts/memory/main.py vec enable
 ```
 

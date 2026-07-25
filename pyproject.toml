@@ -33,6 +33,7 @@ Repository = "https://github.com/HynUx/codex-memory.git"
 memory = "memory.main:main"
 
 [project.optional-dependencies]
+zh = ["jieba"]
 vec = ["sentence-transformers"]
 
 
