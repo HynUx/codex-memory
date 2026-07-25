@@ -35,6 +35,11 @@ DB_PATH = os.path.join(MEMORY_DIR, "memory.db")
 LOCK_PATH = os.path.join(MEMORY_DIR, ".lock")
 CONFIG_PATH = os.path.join(MEMORY_DIR, "config.toml")
 
+def _simple_available():
+    """Check if the simple FTS5 CJK extension is available."""
+    return os.path.exists(os.path.join(MEMORY_DIR, "libsimple.dylib"))
+
+
 # Available LLM models for learner mode (from Codex model list)
 # These are the models the Codex agent can use for memory analysis.
 AVAILABLE_MODELS = {
@@ -149,10 +154,10 @@ def _sync_fts(db, seq, content, topics):
     Does NOT manage transactions — caller must wrap in appropriate
     BEGIN/COMMIT to ensure atomicity with the primary write.
     """
-    seg_content = seg.maybe_segment(content)
+    fts_content = content if _simple_available() else seg.maybe_segment(content)
     db.execute(
         "INSERT OR REPLACE INTO entries_fts(rowid, content, topics) VALUES(?, ?, ?)",
-        (seq, seg_content, topics),
+        (seq, fts_content, topics),
     )
 
 
@@ -205,7 +210,15 @@ def init_db():
     os.makedirs(MEMORY_DIR, exist_ok=True)
     db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
-    db.executescript(SCHEMA_SQL)
+
+    # Load simple CJK tokenizer extension if available
+    if _simple_available():
+        db.enable_load_extension(True)
+        db.load_extension(os.path.join(MEMORY_DIR, "libsimple.dylib"))
+
+    tokenizer = "simple" if _simple_available() else "unicode61"
+    schema = SCHEMA_SQL.replace("tokenize='unicode61'", f"tokenize='{tokenizer}'")
+    db.executescript(schema)
     _run_migrations(db)
     seeds = [
         ("schema_version", "1"),
