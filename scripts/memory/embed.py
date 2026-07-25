@@ -105,3 +105,117 @@ def search(query, entries, limit=5):
             continue
     scored.sort(key=lambda x: -x[0])
     return scored[:limit]
+
+
+# ---- FAISS vector index -----------------------------------------------
+
+import faiss as _faiss
+
+FAISS_INDEX_FILE = "vector.faiss"
+
+
+def _get_faiss_path():
+    """Absolute path to the FAISS index file."""
+    return os.path.join(MODELS_DIR, "..", FAISS_INDEX_FILE)
+
+
+def build_faiss_index(db):
+    """Build a FAISS IndexIDMap from all entries in entries_vec and persist it.
+
+    Uses IndexFlatIP (inner product) which is equivalent to cosine
+    similarity when vectors are L2-normalized.
+    """
+    rows = db.execute(
+        "SELECT seq, vector FROM entries_vec ORDER BY seq"
+    ).fetchall()
+    if not rows:
+        return None
+
+    vectors = np.zeros((len(rows), 512), dtype=np.float32)
+    seqs    = np.zeros(len(rows), dtype=np.int64)
+    for i, row in enumerate(rows):
+        vectors[i] = np.frombuffer(bytes(row["vector"]), dtype=np.float32)
+        seqs[i]    = row["seq"]
+
+    index = _faiss.IndexIDMap(_faiss.IndexFlatIP(vectors.shape[1]))
+    index.add_with_ids(vectors, seqs)
+
+    path = _get_faiss_path()
+    _faiss.write_index(index, path)
+    return index
+
+
+def load_faiss_index():
+    """Load a previously persisted FAISS index, or None."""
+    path = _get_faiss_path()
+    if not os.path.exists(path):
+        return None
+    return _faiss.read_index(path)
+
+
+def vector_search(query, db, limit=10):
+    """Primary vector-first semantic search.
+
+    Uses the persisted FAISS index when available; falls back to an
+    in-memory brute-force cosine scan if no index exists yet.
+    Returns a list of (score, seq, type, content, topics).
+    """
+    index = load_faiss_index()
+    if index is None:
+        return _brute_force_search(query, db, limit)
+
+    q_vec = embed(query).reshape(1, -1).astype(np.float32)
+    scores, indices = index.search(q_vec, min(limit, index.ntotal))
+
+    results = []
+    for idx, score in zip(indices[0], scores[0]):
+        if idx < 0:
+            continue
+        seq = int(idx)
+        row = db.execute(
+            "SELECT e.seq, e.type, e.content, e.topics FROM entries e "
+            "WHERE e.seq = ? AND e.deleted = 0", (seq,)
+        ).fetchone()
+        if row:
+            results.append((float(score), row["seq"], row["type"],
+                            row["content"], row["topics"]))
+    return results
+
+
+def _brute_force_search(query, db, limit=10):
+    """Fallback: scan all vectors and compute cosine similarity."""
+    vec_entries = db.execute(
+        "SELECT e.seq, v.vector FROM entries_vec v "
+        "JOIN entries e ON v.seq = e.seq WHERE e.deleted=0"
+    ).fetchall()
+    if not vec_entries:
+        return []
+
+    q_vec = embed(query)
+    scored = []
+    for seq, vec_bytes in vec_entries:
+        try:
+            vec = np.frombuffer(bytes(vec_bytes), dtype=np.float32)
+            score = cosine_similarity(q_vec, vec)
+            scored.append((score, seq))
+        except Exception:
+            continue
+    scored.sort(key=lambda x: -x[0])
+
+    results = []
+    for score, seq in scored[:limit]:
+        row = db.execute(
+            "SELECT e.seq, e.type, e.content, e.topics FROM entries e "
+            "WHERE e.seq = ? AND e.deleted = 0", (seq,)
+        ).fetchone()
+        if row:
+            results.append((score, row["seq"], row["type"],
+                            row["content"], row["topics"]))
+    return results
+
+
+def delete_faiss_index():
+    """Remove the persisted FAISS index so it can be rebuilt."""
+    path = _get_faiss_path()
+    if os.path.exists(path):
+        os.remove(path)

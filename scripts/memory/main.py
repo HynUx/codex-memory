@@ -332,7 +332,7 @@ def cmd_search(args):
     db = init_db()
     kw = args.keywords
     fts_kw = seg.maybe_segment(kw)
-    limit = getattr(args, "limit", 5)
+    limit = int(getattr(args, "limit", 5))
     offset = getattr(args, "offset", 0)
 
     rows = db.execute(
@@ -501,7 +501,6 @@ def _vec_rebuild(db):
     ).fetchall()
     if not rows:
         return
-    db.execute("BEGIN")
     count = 0
     failed = 0
     for i, row in enumerate(rows):
@@ -516,15 +515,19 @@ def _vec_rebuild(db):
                 (row["seq"], vec.tobytes(), "bge-small-zh-v1.5"),
             )
             count += 1
-            if count > 0 and count % 100 == 0:
-                db.commit()
-                db.execute("BEGIN")
         except Exception:
             failed += 1
             continue  # skip failed entries
     db.commit()
     if count > 0:
         print(f"\u5411\u91cf\u7d22\u5f15\u5df2\u66f4\u65b0: {count} \u6761")
+    elif failed > 0 and len(rows) == failed:
+        print(f"\u26a0\ufe0f \u5411\u91cf\u7d22\u5f15\u5931\u8d25: {failed}/{len(rows)} \u6761\u5168\u90e8\u8df3\u8fc7")
+
+    # Persist FAISS index for fast ANN search
+    if count > 0:
+        embed.delete_faiss_index()
+        embed.build_faiss_index(db)
 def cmd_evolve(args):
     """Consolidate unmerged entries into project-context.md.
 
@@ -606,7 +609,6 @@ def cmd_evolve(args):
         db.execute(
             "UPDATE system SET value = CAST(value AS INTEGER) + 1 WHERE key='total_evolves'"
         )
-        db.commit()
         os.rename(tmp, pc_path)
         print("\u2713 \u8fdb\u5316\u5b8c\u6210 (V=%d)" % V)
 
@@ -822,11 +824,9 @@ def cmd_vec(args):
                 "INSERT OR REPLACE INTO entries_vec(seq, vector, model) VALUES(?, ?, ?)",
                 (row["seq"], vec.tobytes(), "bge-small-zh-v1.5"),
             )
-        db.commit()
         print("\u2713 \u5df2\u7d22\u5f15 %d \u6761" % len(rows))
     elif sub == "rebuild":
         db.execute("DELETE FROM entries_vec")
-        db.commit()
         if not embed.is_available():
             print("\u2717 \u9700\u8981\u5b89\u88c5 sentence-transformers")
             db.close()
@@ -840,7 +840,6 @@ def cmd_vec(args):
                 "INSERT OR REPLACE INTO entries_vec(seq, vector, model) VALUES(?, ?, ?)",
                 (row["seq"], vec.tobytes(), "bge-small-zh-v1.5"),
             )
-        db.commit()
         print("\u2713 \u5df2\u91cd\u5efa\u7d22\u5f15: %d \u6761" % len(rows))
     db.close()
     return 0
@@ -947,7 +946,6 @@ def cmd_entity_add(args):
             "INSERT INTO entities(name, type, entity_values) VALUES(?, ?, ?)",
             (name, etype, values),
         )
-        db.commit()
         eid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
         print(f"✓ 实体已创建 (id={eid})")
     except sqlite3.IntegrityError:
