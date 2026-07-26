@@ -265,11 +265,12 @@ class TestIntegration(unittest.TestCase):
         export_dir = os.path.join(self.test_dir, "export_after")
         old = sys.stdout; sys.stdout = StringIO()
         try:
-            rc = mem.cmd_export(Namespace(dir=export_dir))
+            rc = mem.cmd_export(Namespace(dir=export_dir, format="markdown"))
         finally:
             sys.stdout = old
         self.assertEqual(rc, 0)
-        files = [f for f in os.listdir(export_dir) if f != "_index.md"]
+        md_dir = os.path.join(export_dir, "markdown")
+        files = [f for f in os.listdir(md_dir) if f != "_index.md"]
         self.assertGreater(len(files), 0)
         self.assertTrue(os.path.exists(os.path.join(export_dir, "_index.md")))
 
