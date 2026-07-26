@@ -608,6 +608,12 @@ def cmd_evolve(args):
         pc_path = os.path.join(MEMORY_DIR, "project-context.md")
         backup_dir = os.path.join(MEMORY_DIR, ".backup")
         os.makedirs(backup_dir, exist_ok=True)
+        
+        # Backup memory.db with WAL checkpoint for data safety
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        db_path = os.path.join(MEMORY_DIR, "memory.db")
+        if os.path.exists(db_path):
+            shutil.copy2(db_path, os.path.join(backup_dir, "memory-v%d.db" % V))
         if os.path.exists(pc_path):
             shutil.copy2(pc_path, os.path.join(backup_dir, "v%d.bak" % (V - 1)))
 
@@ -673,6 +679,17 @@ def cmd_evolve(args):
                 os.remove(os.path.join(backup_dir, fn))
                 print("  \u6e05\u7406\u65e7\u5907\u4efd: %s" % fn)
 
+
+        # DB backup retention: keep last 10 memory-v{N}.db files
+        db_baks = []
+        for fn in os.listdir(backup_dir):
+            m = re.match(r'memory-v(\d+)\.db', fn)
+            if m:
+                db_baks.append((int(m.group(1)), fn))
+        db_baks.sort(key=lambda x: -x[0])
+        for ver, fn in db_baks[10:]:
+            os.remove(os.path.join(backup_dir, fn))
+            print("  清理旧DB备份: %s" % fn)
         db.close()
     finally:
         release_lock()

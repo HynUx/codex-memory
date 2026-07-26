@@ -115,8 +115,10 @@ class TestEvolve(unittest.TestCase):
         self.assertFalse(os.path.exists(backup_dir))
         self._evolve()
         self.assertTrue(os.path.exists(backup_dir))
-        # First evolve: no prior file to back up, so backup dir is empty
-        self.assertEqual(len(os.listdir(backup_dir)), 0)
+        # First evolve: no prior project-context.md to back up,
+        # but memory.db IS backed up (task 2).
+        pcs = [f for f in os.listdir(backup_dir) if f.startswith('v')]
+        self.assertEqual(len(pcs), 0)
         self._add("second entry")
         self._evolve()
         # Second evolve: first project-context.md was backed up
