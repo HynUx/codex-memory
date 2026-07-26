@@ -14,6 +14,7 @@ from io import StringIO
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import main as mem
+import embed
 
 
 class TestBuildParser(unittest.TestCase):
@@ -200,6 +201,7 @@ class TestMainEntry(unittest.TestCase):
         self.test_dir = tempfile.mkdtemp(prefix="cli_test_")
         mem.MEMORY_DIR = self.test_dir
         mem.DB_PATH = os.path.join(self.test_dir, "memory.db")
+        embed.set_faiss_dir(self.test_dir)
         mem.LOCK_PATH = os.path.join(self.test_dir, ".lock")
 
     def tearDown(self):

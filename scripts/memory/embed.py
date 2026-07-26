@@ -112,6 +112,18 @@ def search(query, entries, limit=5):
 
 FAISS_INDEX_FILE = "vector.faiss"
 
+# Override point: main.py sets this to the active MEMORY_DIR so the
+# FAISS index lives alongside memory.db.  Tests automatically get
+# isolated index files without any special mocking.
+_faiss_dir = None
+
+
+def set_faiss_dir(path):
+    """Point the FAISS index at a specific directory (e.g. MEMORY_DIR)."""
+    global _faiss_dir
+    _faiss_dir = path
+
+
 def _get_faiss():
     """Lazy-import faiss so embed.py works without faiss-cpu installed."""
     import faiss
@@ -120,7 +132,8 @@ def _get_faiss():
 
 def _get_faiss_path():
     """Absolute path to the FAISS index file."""
-    return os.path.join(MODELS_DIR, "..", FAISS_INDEX_FILE)
+    base = _faiss_dir if _faiss_dir else os.path.join(MODELS_DIR, "..")
+    return os.path.join(base, FAISS_INDEX_FILE)
 
 
 def build_faiss_index(db):
@@ -163,9 +176,19 @@ def vector_search(query, db, limit=10):
     Uses the persisted FAISS index when available; falls back to an
     in-memory brute-force cosine scan if no index exists yet.
     Returns a list of (score, seq, type, content, topics).
-    """
+
+    When neither a FAISS index nor any entries_vec rows exist,
+    returns an empty list immediately to avoid unnecessary model
+    loading (important for tests)."""
     index = load_faiss_index()
     if index is None:
+        # Quick guard: don't load the embedding model if there's
+        # nothing to compare against.
+        count = db.execute(
+            "SELECT count(*) FROM entries_vec"
+        ).fetchone()[0]
+        if count == 0:
+            return []
         return _brute_force_search(query, db, limit)
 
     q_vec = embed(query).reshape(1, -1).astype(np.float32)

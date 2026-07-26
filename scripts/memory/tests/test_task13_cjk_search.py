@@ -11,6 +11,7 @@ from io import StringIO
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import main as mem
+import embed
 
 
 class TestCjkSearch(unittest.TestCase):
@@ -27,6 +28,7 @@ class TestCjkSearch(unittest.TestCase):
     def setUp(self):
         mem.MEMORY_DIR = self.test_dir
         mem.DB_PATH = os.path.join(self.test_dir, "memory.db")
+        embed.set_faiss_dir(self.test_dir)
         mem.LOCK_PATH = os.path.join(self.test_dir, ".lock")
         mem.CONFIG_PATH = os.path.join(self.test_dir, "config.toml")
         if os.path.exists(mem.DB_PATH):
@@ -36,6 +38,10 @@ class TestCjkSearch(unittest.TestCase):
             wp = mem.DB_PATH + ext
             if os.path.exists(wp):
                 os.remove(wp)
+        # Clean up stale FAISS index from previous test
+        faiss_path = os.path.join(self.test_dir, "vector.faiss")
+        if os.path.exists(faiss_path):
+            os.remove(faiss_path)
 
     def tearDown(self):
         if mem._lock_fd is not None:

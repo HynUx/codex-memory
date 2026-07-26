@@ -6,6 +6,7 @@ from io import StringIO
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import main as mem
+import embed
 
 
 class TestLoadExportStatus(unittest.TestCase):
@@ -22,6 +23,7 @@ class TestLoadExportStatus(unittest.TestCase):
     def setUp(self):
         mem.MEMORY_DIR = self.test_dir
         mem.DB_PATH = os.path.join(self.test_dir, "memory.db")
+        embed.set_faiss_dir(self.test_dir)
         mem.LOCK_PATH = os.path.join(self.test_dir, ".lock")
         for fname in ["profile.md", "project-context.md"]:
             fp = os.path.join(self.test_dir, fname)

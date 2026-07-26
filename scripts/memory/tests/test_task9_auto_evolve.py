@@ -12,6 +12,7 @@ from argparse import Namespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import main as mem
+import embed
 
 
 class TestAutoEvolve(unittest.TestCase):
@@ -21,6 +22,7 @@ class TestAutoEvolve(unittest.TestCase):
         self.test_dir = tempfile.mkdtemp(prefix="auto_evolve_")
         mem.MEMORY_DIR = self.test_dir
         mem.DB_PATH = os.path.join(self.test_dir, "memory.db")
+        embed.set_faiss_dir(self.test_dir)
         mem.LOCK_PATH = os.path.join(self.test_dir, ".lock")
         mem.CONFIG_PATH = os.path.join(self.test_dir, "config.toml")
 

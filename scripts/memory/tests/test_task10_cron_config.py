@@ -59,6 +59,7 @@ class TestVecRebuild(unittest.TestCase):
     def setUp(self):
         mem.MEMORY_DIR = self.test_dir
         mem.DB_PATH = os.path.join(self.test_dir, "memory.db")
+        embed.set_faiss_dir(self.test_dir)
         if os.path.exists(mem.DB_PATH):
             os.remove(mem.DB_PATH)
         self.db = mem.init_db()

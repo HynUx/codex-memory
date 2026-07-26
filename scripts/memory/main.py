@@ -35,6 +35,8 @@ DB_PATH = os.path.join(MEMORY_DIR, "memory.db")
 LOCK_PATH = os.path.join(MEMORY_DIR, ".lock")
 CONFIG_PATH = os.path.join(MEMORY_DIR, "config.toml")
 
+
+
 def _simple_available():
     """Check if the simple FTS5 CJK extension is available."""
     return os.path.exists(os.path.join(MEMORY_DIR, "libsimple.dylib"))
@@ -208,6 +210,7 @@ def init_db():
     connection.
     """
     os.makedirs(MEMORY_DIR, exist_ok=True)
+    embed.set_faiss_dir(MEMORY_DIR)
     db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
 
@@ -341,21 +344,32 @@ def cmd_add(args):
     return 0
 
 def cmd_search(args):
-    """Search memories via FTS5 with LIKE fallback."""
+    """Search memories: vector semantic -> FTS5 keyword -> LIKE fallback."""
     db = init_db()
     kw = args.keywords
-    fts_kw = seg.maybe_segment(kw)
     limit = int(getattr(args, "limit", 5))
     offset = getattr(args, "offset", 0)
+    rows = []
 
-    rows = db.execute(
-        """SELECT e.seq, e.type, e.content, e.topics FROM entries_fts f
-           JOIN entries e ON f.rowid = e.seq
-           WHERE entries_fts MATCH ? AND e.deleted=0
-           ORDER BY rank LIMIT ? OFFSET ?""",
-        (fts_kw, limit, offset),
-    ).fetchall()
+    # Layer 1: Vector semantic search (primary)
+    if embed.is_available():
+        vec_results = embed.vector_search(kw, db, limit)
+        if vec_results:
+            # vec_results: list of (score, seq, type, content, topics)
+            rows = [(r[1], r[2], r[3], r[4]) for r in vec_results]
 
+    # Layer 2: FTS5 keyword search (fallback)
+    if not rows:
+        fts_kw = seg.maybe_segment(kw)
+        rows = db.execute(
+            """SELECT e.seq, e.type, e.content, e.topics FROM entries_fts f
+               JOIN entries e ON f.rowid = e.seq
+               WHERE entries_fts MATCH ? AND e.deleted=0
+               ORDER BY rank LIMIT ? OFFSET ?""",
+            (fts_kw, limit, offset),
+        ).fetchall()
+
+    # Layer 3: LIKE substring (final fallback)
     if not rows:
         like = "%%%s%%" % kw
         rows = db.execute(
@@ -363,29 +377,14 @@ def cmd_search(args):
             (like, limit, offset),
         ).fetchall()
 
-    # Vector search fallback (when FTS5 + LIKE miss)
-    if not rows and embed.is_available():
-        vec_entries = db.execute(
-            "SELECT e.seq, v.vector FROM entries_vec v JOIN entries e ON v.seq = e.seq WHERE e.deleted=0"
-        ).fetchall()
-        if vec_entries:
-            results = embed.search(kw, [(r["seq"], r["vector"]) for r in vec_entries], limit)
-            if results:
-                seqs = [r[1] for r in results]
-                ph = ",".join("?" * len(seqs))
-                rows = db.execute(
-                    "SELECT seq, type, content, topics FROM entries WHERE seq IN (%s)" % ph,
-                    seqs,
-                ).fetchall()
-
     if not rows:
         print("未找到相关记忆")
         db.close()
         return 0
 
     print("相关记忆（共 %d 条）：" % len(rows))
-    for seq, typ, content, topics in rows:
-        print("  [seq:%d] %s | %s | %.60s..." % (seq, typ, topics, content))
+    for row in rows:
+        print("  [seq:%d] %s | %s | %.60s..." % (row[0], row[1], row[2], row[3]))
     db.close()
     return 0
 

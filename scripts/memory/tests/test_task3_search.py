@@ -1,4 +1,4 @@
-"""Task 3: memory search + list 单元测试"""
+"""Task 3: memory search + list 单元测试 (vector-first search)"""
 
 import sys, os, tempfile, shutil, unittest
 from argparse import Namespace
@@ -6,6 +6,7 @@ from io import StringIO
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import main as mem
+import embed
 
 
 class TestSearchList(unittest.TestCase):
@@ -22,6 +23,7 @@ class TestSearchList(unittest.TestCase):
     def setUp(self):
         mem.MEMORY_DIR = self.test_dir
         mem.DB_PATH = os.path.join(self.test_dir, "memory.db")
+        embed.set_faiss_dir(self.test_dir)
         if os.path.exists(mem.DB_PATH):
             os.remove(mem.DB_PATH)
         self.db = mem.init_db()
@@ -54,6 +56,8 @@ class TestSearchList(unittest.TestCase):
             return rc, sys.stdout.getvalue()
         finally:
             sys.stdout = old
+
+    # --- Original tests (unchanged) ---
 
     def test_search_fts5_match(self):
         self._add("hello world unique_keyword_1")
@@ -90,9 +94,29 @@ class TestSearchList(unittest.TestCase):
             self._add(f"limit_test_{i}")
         rc, out = self._search("limit_test", limit=2)
         self.assertEqual(rc, 0)
-        # should only show 2 results
         count = out.count("limit_test_")
         self.assertEqual(count, 2)
+
+    # --- Vector search tests ---
+
+    def test_fts5_fallback_when_no_vectors(self):
+        """FTS5 keyword search works when vectors are not indexed."""
+        self._add("unique_fts5_keyword_xyz", add_type="tip")
+        rc, out = self._search("unique_fts5_keyword_xyz")
+        self.assertEqual(rc, 0)
+        self.assertIn("unique_fts5_keyword_xyz", out)
+
+    def test_vector_first_search(self):
+        """Vector search returns results when entries have vectors."""
+        if not embed.is_available():
+            self.skipTest("sentence-transformers not available")
+        self._add("python flask web framework tutorial", add_type="tip")
+        self._add("使用Python Flask构建Web应用", add_type="tip")
+        # Build vector index via evolve
+        mem.cmd_evolve(None)
+        rc, out = self._search("python web development")
+        self.assertEqual(rc, 0)
+        self.assertIn("flask", out)
 
 
 if __name__ == "__main__":
