@@ -27,6 +27,7 @@ import sqlite3
 import sys
 import time
 import re
+import numpy as np
 import embed
 import seg
 import schema
@@ -202,6 +203,17 @@ def _run_migrations(db):
                 # Fallback: sync with raw content
                 _sync_fts(db, r["seq"], r["content"], r["topics"])
         db.execute("PRAGMA user_version = 3")
+
+    if version < 4:
+        try:
+            db.execute("ALTER TABLE entries ADD COLUMN dedup_group INTEGER DEFAULT NULL")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            db.execute("ALTER TABLE entries ADD COLUMN dedup_score REAL DEFAULT NULL")
+        except sqlite3.OperationalError:
+            pass
+        db.execute("PRAGMA user_version = 4")
 
 
 def init_db():
@@ -642,11 +654,55 @@ def cmd_evolve(args):
         if os.path.exists(pc_path):
             shutil.copy2(pc_path, os.path.join(backup_dir, "v%d.bak" % (V - 1)))
 
+
+        # ---- Dedup clustering (within same type, cosine > 0.8) ----
+        dedup_map = {}  # seq -> (representative_seq, score)
+        if embed.is_available():
+            vec_count = db.execute("SELECT count(*) FROM entries_vec").fetchone()[0]
+            if vec_count > 0:
+                entries_with_vec = db.execute(
+                    "SELECT e.seq, e.type, e.created, v.vector FROM entries e "
+                    "JOIN entries_vec v ON e.seq = v.seq WHERE e.deleted = 0 "
+                    "ORDER BY e.created DESC"
+                ).fetchall()
+
+                # Group by type, skip zero vectors
+                by_type = {}
+                for row in entries_with_vec:
+                    vec = np.frombuffer(bytes(row["vector"]), dtype=np.float32)
+                    if not vec.any():
+                        continue  # skip zero vectors
+                    by_type.setdefault(row["type"], []).append((row["seq"], vec))
+
+                cluster_id = 0
+                for etype, items in by_type.items():
+                    clusters = []  # list of (seq, centroid_vec)
+                    for seq, vec in items:
+                        best_score = 0.0
+                        best_cluster = -1
+                        for ci, (cseq, cvec) in enumerate(clusters):
+                            score = float(np.dot(vec, cvec))
+                            if score > best_score:
+                                best_score = score
+                                best_cluster = ci
+                        if best_score >= 0.8 and best_cluster >= 0:
+                            dedup_map[seq] = (clusters[best_cluster][0], best_score)
+                        else:
+                            cluster_id += 1
+                            clusters.append((seq, vec))
+
+                if dedup_map:
+                    print(f"  去冗: {len(dedup_map)} 条省略（{len(by_type)} 类型）")
+
         # Write ALL active entries (preserving consolidated ones)
         out = "<!-- evolve_seq: %d -->\n\n# \u9879\u76ee\u4e0a\u4e0b\u6587\n\n" % V
         for e in all_active:
             tag = " [user_correction]" if e["correction_count"] > 0 else ""
-            out += "- seq=%d [%s%s]: %s\n" % (e["seq"], e["type"], tag, e["content"])
+            if e["seq"] in dedup_map:
+                rep_seq, score = dedup_map[e["seq"]]
+                out += "  \u203b \u53bb\u5197: seq=%d \u5df2\u5408\u5e76\u4e8e seq=%d (\u76f8\u4f3c\u5ea6 %.2f)\n" % (e["seq"], rep_seq, score)
+            else:
+                out += "- seq=%d [%s%s]: %s\n" % (e["seq"], e["type"], tag, e["content"])
 
         if deleted_with_cc:
             out += "\n## \u5df2\u5220\u9664\n\n"
@@ -670,6 +726,13 @@ def cmd_evolve(args):
             db.execute(
                 "UPDATE entries SET correction_count=0 WHERE seq=?",
                 (e["seq"],),
+            )
+
+        # Persist dedup metadata
+        for seq, (rep_seq, score) in dedup_map.items():
+            db.execute(
+                "UPDATE entries SET dedup_group=?, dedup_score=? WHERE seq=?",
+                (rep_seq, score, seq),
             )
         db.execute(
             "INSERT OR REPLACE INTO system(key, value, updated) "
@@ -784,7 +847,7 @@ def cmd_export(args):
     limit = getattr(args, "limit", 0) or 999999
     offset = getattr(args, "offset", 0) or 0
 
-    export_base = os.path.join(MEMORY_DIR, "export")
+    export_base = getattr(args, "dir", None) or os.path.join(MEMORY_DIR, "export")
     export_dir = os.path.join(export_base, fmt)
     tmp_dir = os.path.join(export_base, ".tmp", fmt)
 
@@ -1403,6 +1466,7 @@ def build_parser():
     # export
     p = sub.add_parser("export", help="导出记忆")
     p.add_argument("--format", choices=["markdown","json","csv"], default="markdown", help="导出格式")
+    p.add_argument("--dir", default=None, help="导出目录（默认 ~/.codex/memory/export）")
     p.add_argument("--limit", type=int, default=0, help="最大条目数（0=全部）")
     p.add_argument("--offset", type=int, default=0, help="起始偏移")
     p.add_argument("--dir", help="导出目录")
