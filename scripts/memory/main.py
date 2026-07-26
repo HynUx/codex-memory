@@ -330,6 +330,22 @@ def cmd_add(args):
                 print("触发自动进化...")
                 cmd_evolve(argparse.Namespace(force=True))
                 return 0
+            
+            # Time-based trigger: evolve when oldest unmerged entry is
+            # older than stale_evolve_days (default 7), regardless of
+            # the count threshold.
+            stale_days = cfg.get("stale_evolve_days", 7)
+            if unmerged > 0 and stale_days > 0:
+                age = db.execute(
+                    "SELECT CAST(julianday('now') - julianday(created) AS INTEGER) "
+                    "FROM entries WHERE deleted=0 AND (consolidated_seq IS NULL OR correction_count>0) "
+                    "ORDER BY created LIMIT 1"
+                ).fetchone()[0]
+                if age >= stale_days:
+                    db.close()
+                    print(f"最旧未合并记忆已 {age} 天，触发自动进化...")
+                    cmd_evolve(argparse.Namespace(force=True))
+                    return 0
 
     db.close()
     return 0
@@ -812,6 +828,25 @@ def cmd_status(args):
             if re.match(r'v(\d+)\.bak', fn):
                 backups += 1
     vc = db.execute("SELECT count(*) FROM entries_vec").fetchone()[0]
+    
+    # Health: last evolve time
+    last_evolve = None
+    pc_path = os.path.join(MEMORY_DIR, "project-context.md")
+    if os.path.exists(pc_path):
+        last_evolve = os.path.getmtime(pc_path)
+    
+    # Health: oldest unmerged entry age
+    oldest_row = db.execute(
+        "SELECT created FROM entries WHERE deleted=0 "
+        "AND (consolidated_seq IS NULL OR correction_count>0) "
+        "ORDER BY created LIMIT 1"
+    ).fetchone()
+    oldest_age = None
+    if oldest_row:
+        oldest_age = db.execute(
+            "SELECT CAST(julianday('now') - julianday(?) AS INTEGER)",
+            (oldest_row["created"],)
+        ).fetchone()[0]
 
     print("\U0001f4ca \u8bb0\u5fc6\u7cfb\u7edf\u72b6\u6001")
     print("  \u603b\u8bb0\u5f55: %d | \u6709\u6548: %d | \u672a\u5408\u5e76: %d | \u5df2\u5220\u9664: %d | \u5927\u5c0f: %s" % (
@@ -819,6 +854,18 @@ def cmd_status(args):
     print("\U0001f4c8 \u8fdb\u5316\u8ffd\u8e2a")
     print("  \u7248\u672c: v%s | \u5386\u53f2\u7248\u672c: %d \u4e2a" % (es, backups))
     print("  \u7d2f\u8ba1: %s adds / %s corrections / %s evolves" % (ta, tc, te))
+    if last_evolve:
+        import datetime
+        dt = datetime.datetime.fromtimestamp(last_evolve)
+        days_since = (datetime.datetime.now() - dt).days
+        stale_flag = " ⚠️ 超过7天未进化" if days_since > 7 else ""
+        print("  上次进化: %s (%d天前)%s" % (
+            dt.strftime("%Y-%m-%d %H:%M"), days_since, stale_flag))
+    else:
+        print("  上次进化: 无")
+    if oldest_age is not None and unmerged > 0:
+        stale_flag2 = " ⚠️ 超过7天" if oldest_age > 7 else ""
+        print("  未合并最早: %d天前%s" % (oldest_age, stale_flag2))
     print("\U0001f50d \u641c\u7d22")
     print("  FTS5: \u2705 | \u5411\u91cf: %s (%d/%d \u5df2\u7d22\u5f15)" % (
         "\u2705" if vc > 0 else "\u274c (\u672a\u542f\u7528)", vc, active))
