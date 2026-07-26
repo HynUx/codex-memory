@@ -21,7 +21,7 @@ class TestBuildParser(unittest.TestCase):
     """build_parser() must return a complete ArgumentParser with all subcommands."""
 
     EXPECTED_COMMANDS = [
-        "config", "review",        "stats", "stats", "add", "search", "list", "delete", "update",
+        "config", "review", "stats", "add", "search", "list", "delete", "update",
         "evolve", "load", "export", "status", "vec", "migrate",
         "entity", "belief", "relation",
     ]
