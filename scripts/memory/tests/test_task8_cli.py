@@ -155,7 +155,7 @@ class TestCommandDispatch(unittest.TestCase):
     def test_all_commands_mapped(self):
         """COMMAND_DISPATCH has all 13 entries."""
         expected = {"config", "review",
-        "add", "search", "list", "delete", "update",
+        "stats", "add", "search", "list", "delete", "update",
                     "evolve", "load", "export", "status", "vec", "migrate",
                     "entity", "belief", "relation"}
         self.assertCountEqual(mem.COMMAND_DISPATCH.keys(), expected)

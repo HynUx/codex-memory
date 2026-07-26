@@ -743,28 +743,70 @@ def cmd_load(args):
 
 
 def cmd_export(args):
-    """Export memories to Obsidian-compatible markdown files."""
+    """Export memories in markdown (Obsidian), JSON, or CSV format."""
     db = init_db()
-    export_dir = getattr(args, "dir", os.path.join(MEMORY_DIR, "export"))
+    fmt = getattr(args, "format", "markdown")
+    limit = getattr(args, "limit", 0) or 999999
+    offset = getattr(args, "offset", 0) or 0
+
+    export_base = os.path.join(MEMORY_DIR, "export")
+    export_dir = os.path.join(export_base, fmt)
+    tmp_dir = os.path.join(export_base, ".tmp", fmt)
+
+    if os.path.exists(tmp_dir):
+        shutil.rmtree(tmp_dir)
+    os.makedirs(tmp_dir)
+
     if os.path.exists(export_dir):
         shutil.rmtree(export_dir)
-    os.makedirs(export_dir)
 
     rows = db.execute(
-        "SELECT seq, created, type, content, topics FROM entries WHERE deleted=0 ORDER BY seq"
+        "SELECT seq, created, type, content, topics FROM entries WHERE deleted=0 "
+        "ORDER BY seq LIMIT ? OFFSET ?", (limit, offset)
     ).fetchall()
 
-    for row in rows:
-        seq, typ, text = row["seq"], row["type"], row["content"]
-        created, topics = row["created"], row["topics"]
-        safe = typ.replace(" ", "-").replace("/", "_")
-        fn = "seq-%04d-%s.md" % (seq, safe)
-        tags = []
-        if topics and topics != "[]":
-            tags = [t.strip().strip('"') for t in topics.strip("[]").split(",")]
-        tag_str = ", ".join(t for t in tags)
+    if fmt == "json":
+        entities_rows = db.execute("SELECT * FROM entities ORDER BY id").fetchall()
+        beliefs_rows = db.execute("SELECT * FROM beliefs ORDER BY id").fetchall()
+        relations_rows = db.execute("SELECT * FROM relations ORDER BY id").fetchall()
+        result = {
+            "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "total": len(rows),
+            "entries": [dict(r) for r in rows],
+            "entities": [dict(r) for r in entities_rows],
+            "beliefs": [dict(r) for r in beliefs_rows],
+            "relations": [dict(r) for r in relations_rows],
+        }
+        with open(os.path.join(tmp_dir, "memory.json"), "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
 
-        md = """---
+    elif fmt == "csv":
+        import csv as _csv
+        def _w(fn, hdrs, data_rows):
+            with open(os.path.join(tmp_dir, fn), "w", encoding="utf-8-sig", newline="") as f:
+                w = _csv.writer(f)
+                w.writerow(hdrs)
+                for r in data_rows:
+                    w.writerow([r[h] for h in hdrs])
+        _w("entries.csv", ["seq","created","type","content","topics"], rows)
+        _w("entities.csv", ["id","name","type","entity_values","created","updated"],
+           db.execute("SELECT * FROM entities ORDER BY id").fetchall())
+        _w("beliefs.csv", ["id","content","source_seqs","confidence","created"],
+           db.execute("SELECT * FROM beliefs ORDER BY id").fetchall())
+        _w("relations.csv", ["id","subject_id","predicate","object_id","source_seq","created"],
+           db.execute("SELECT * FROM relations ORDER BY id").fetchall())
+
+    else:  # markdown (Obsidian-compatible)
+        for row in rows:
+            seq, typ, text = row["seq"], row["type"], row["content"]
+            created, topics = row["created"], row["topics"]
+            safe = typ.replace(" ", "-").replace("/", "_")
+            fn = "seq-%04d-%s.md" % (seq, safe)
+            tags = []
+            if topics and topics != "[]":
+                tags = [t.strip().strip('"') for t in topics.strip("[]").split(",")]
+            tag_str = ", ".join(t for t in tags)
+            md = """---
 seq: %d
 type: %s
 topics: %s
@@ -777,23 +819,23 @@ tags: [%s]
 %s
 
 ---
-*Source: memory.db | \u5bfc\u51fa: %s*
+*Source: memory.db | 导出: %s*
 """ % (seq, typ, topics, created, tag_str, text, text, time.strftime("%Y-%m-%d %H:%M"))
+            with open(os.path.join(tmp_dir, fn), "w") as f:
+                f.write(md)
 
-        with open(os.path.join(export_dir, fn), "w") as f:
-            f.write(md)
+        with open(os.path.join(tmp_dir, "_index.md"), "w") as f:
+            f.write("""# 记忆仪表盘
 
-    with open(os.path.join(export_dir, "_index.md"), "w") as f:
-        f.write("""# \u8bb0\u5fc6\u4eea\u8868\u76d8
+导出时间: %s
 
-\u5bfc\u51fa\u65f6\u95f4: %s
+总记录: %d
 
-\u603b\u8bb0\u5f55: %d
-
-\u6587\u4ef6\u6570: %d
+文件数: %d
 """ % (time.strftime("%Y-%m-%d %H:%M"), len(rows), len(rows)))
 
-    print("\u2713 \u5df2\u5bfc\u51fa %d \u6761\u5230 %s" % (len(rows), export_dir))
+    os.rename(tmp_dir, export_dir)
+    print("✓ 已导出 %d 条到 %s" % (len(rows), export_dir))
     db.close()
     return 0
 
@@ -1324,7 +1366,10 @@ def build_parser():
     p = sub.add_parser("load", help="加载记忆上下文")
     p.add_argument("--limit", type=int, default=10)
     # export
-    p = sub.add_parser("export", help="导出 Obsidian 兼容 Markdown")
+    p = sub.add_parser("export", help="导出记忆")
+    p.add_argument("--format", choices=["markdown","json","csv"], default="markdown", help="导出格式")
+    p.add_argument("--limit", type=int, default=0, help="最大条目数（0=全部）")
+    p.add_argument("--offset", type=int, default=0, help="起始偏移")
     p.add_argument("--dir", help="导出目录")
 
     # status

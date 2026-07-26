@@ -80,13 +80,13 @@ class TestLoadExportStatus(unittest.TestCase):
     def test_export_empty(self):
         rc, out = self._run(mem.cmd_export, dir=os.path.join(self.test_dir, "export"))
         self.assertEqual(rc, 0)
-        ed = os.path.join(self.test_dir, "export")
+        ed = os.path.join(self.test_dir, "export", "markdown")
         self.assertTrue(os.path.exists(os.path.join(ed, "_index.md")))
 
     def test_export_creates_files(self):
         self._add("export content")
-        ed = os.path.join(self.test_dir, "export")
-        rc, out = self._run(mem.cmd_export, dir=ed)
+        ed = os.path.join(self.test_dir, "export", "markdown")
+        rc, out = self._run(mem.cmd_export, dir=os.path.dirname(ed), format="markdown")
         self.assertEqual(rc, 0)
         files = [f for f in os.listdir(ed) if f != "_index.md"]
         self.assertGreater(len(files), 0)
@@ -96,8 +96,8 @@ class TestLoadExportStatus(unittest.TestCase):
     def test_export_with_types(self):
         self._add("workflow test", type="workflow")
         self._add("bug test", type="bug")
-        ed = os.path.join(self.test_dir, "export")
-        rc, out = self._run(mem.cmd_export, dir=ed)
+        ed = os.path.join(self.test_dir, "export", "markdown")
+        rc, out = self._run(mem.cmd_export, dir=os.path.dirname(ed), format="markdown")
         self.assertEqual(rc, 0)
         files = [f for f in os.listdir(ed) if f != "_index.md"]
         self.assertGreaterEqual(len(files), 2)
