@@ -29,6 +29,8 @@ import time
 import re
 import embed
 import seg
+import schema
+import config
 
 MEMORY_DIR = os.path.expanduser("~/.codex/memory")
 DB_PATH = os.path.join(MEMORY_DIR, "memory.db")
@@ -220,8 +222,8 @@ def init_db():
         db.load_extension(os.path.join(MEMORY_DIR, "libsimple.dylib"))
 
     tokenizer = "simple" if _simple_available() else "unicode61"
-    schema = SCHEMA_SQL.replace("tokenize='unicode61'", f"tokenize='{tokenizer}'")
-    db.executescript(schema)
+    schema_text = schema.SCHEMA_SQL.replace("tokenize='unicode61'", f"tokenize='{tokenizer}'")
+    db.executescript(schema_text)
     _run_migrations(db)
     seeds = [
         ("schema_version", "1"),
@@ -243,38 +245,11 @@ def init_db():
 
 
 def load_config():
-    """Load config.toml, return dict with defaults for missing keys."""
-    cfg = {
-        "auto_evolve_enabled": True,
-        "auto_evolve_threshold": 10,
-        "suggest_threshold": 10,
-        "learner_model": DEFAULT_LEARNER_MODEL,
-    }
-    if os.path.exists(CONFIG_PATH):
-        try:
-            with open(CONFIG_PATH) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith("#") or "=" not in line:
-                        continue
-                    key, val = line.split("=", 1)
-                    key = key.strip()
-                    val = val.strip().strip("'\"")  # I1: strip outer quotes first
-                    if val.lower() in ("true", "false"):
-                        cfg[key] = val.lower() == "true"
-                    elif val.isdigit():
-                        cfg[key] = int(val)
-                    elif key in cfg:
-                        # F1: don't overwrite defaults with invalid values
-                        print(f"\u26a0 \u914d\u7f6e\u503c\u65e0\u6548: {key}={val}\uff0c\u4f7f\u7528\u9ed8\u8ba4\u503c", file=sys.stderr)
-        except (OSError, ValueError) as e:
-            # I2: user can see config read failures
-            print(f"\u26a0 \u8bfb\u53d6\u914d\u7f6e\u5931\u8d25: {e}\uff0c\u4f7f\u7528\u9ed8\u8ba4\u503c", file=sys.stderr)
-    return cfg
+    """Load memory config from TOML file (or defaults).
 
-
-# ---- Commands ---------------------------------------------------------------
-
+    Thin wrapper around config.load_config() for backward compatibility.
+    """
+    return config.load_config(CONFIG_PATH)
 
 def cmd_add(args):
     """Record a new learning entry."""
@@ -324,7 +299,11 @@ def cmd_add(args):
             unmerged = db.execute(
                 "SELECT count(*) FROM entries WHERE deleted=0 AND (consolidated_seq IS NULL OR correction_count>0)"
             ).fetchone()[0]
-            threshold = cfg.get("auto_evolve_threshold", 10)
+            threshold_raw = cfg.get("auto_evolve_threshold", 10)
+            try:
+                threshold = int(threshold_raw)
+            except (ValueError, TypeError):
+                threshold = 10
             if unmerged >= threshold:
                 db.close()
                 print("触发自动进化...")
@@ -571,7 +550,11 @@ def cmd_evolve(args):
         # - Programmatic (args=None or force=True from auto-evolve): skip guard
         if args is not None and not getattr(args, 'force', False):
             cfg = load_config()
-            threshold = cfg.get("auto_evolve_threshold", 10)
+            threshold_raw = cfg.get("auto_evolve_threshold", 10)
+            try:
+                threshold = int(threshold_raw)
+            except (ValueError, TypeError):
+                threshold = 10
             unmerged = db.execute(
                 "SELECT count(*) FROM entries WHERE deleted=0 AND (consolidated_seq IS NULL OR correction_count>0)"
             ).fetchone()[0]
