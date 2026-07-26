@@ -272,7 +272,7 @@ class TestIntegration(unittest.TestCase):
         md_dir = os.path.join(export_dir, "markdown")
         files = [f for f in os.listdir(md_dir) if f != "_index.md"]
         self.assertGreater(len(files), 0)
-        self.assertTrue(os.path.exists(os.path.join(export_dir, "_index.md")))
+        self.assertTrue(os.path.exists(os.path.join(md_dir, "_index.md")))
 
     # ---- Status after evolve -------------------------------------------------
 

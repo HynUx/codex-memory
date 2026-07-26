@@ -1469,7 +1469,6 @@ def build_parser():
     p.add_argument("--dir", default=None, help="导出目录（默认 ~/.codex/memory/export）")
     p.add_argument("--limit", type=int, default=0, help="最大条目数（0=全部）")
     p.add_argument("--offset", type=int, default=0, help="起始偏移")
-    p.add_argument("--dir", help="导出目录")
 
     # status
     # review
