@@ -798,6 +798,53 @@ tags: [%s]
     return 0
 
 
+def cmd_stats(args):
+    """Show memory analytics: type distribution, growth, topics."""
+    db = init_db()
+    fmt = getattr(args, "format", "text")
+
+    # Type distribution
+    type_counts = db.execute(
+        "SELECT type, count(*) as cnt FROM entries WHERE deleted=0 "
+        "GROUP BY type ORDER BY cnt DESC"
+    ).fetchall()
+
+    # Monthly growth
+    monthly = db.execute(
+        "SELECT strftime('%Y-%m', created) as month, count(*) as cnt "
+        "FROM entries WHERE deleted=0 GROUP BY month ORDER BY month"
+    ).fetchall()
+
+    # Total
+    total = sum(r["cnt"] for r in type_counts)
+
+    if fmt == "json":
+        import json as _json
+        result = {
+            "total": total,
+            "by_type": {r["type"]: r["cnt"] for r in type_counts},
+            "monthly": [{"month": r["month"], "count": r["cnt"]} for r in monthly],
+        }
+        print(_json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print("📊 记忆统计分析")
+        print("  总条目: %d" % total)
+        print()
+        print("  按类型分布:")
+        for r in type_counts:
+            bar = "█" * min(r["cnt"], 30)
+            print("    %-14s %3d %s" % (r["type"], r["cnt"], bar))
+        print()
+        if monthly:
+            print("  按月增长:")
+            for r in monthly:
+                bar = "█" * min(r["cnt"], 30)
+                print("    %s  %3d %s" % (r["month"], r["cnt"], bar))
+
+    db.close()
+    return 0
+
+
 def cmd_status(args):
     """Show system health dashboard with DB size and backup info."""
     db = init_db()
@@ -1299,6 +1346,8 @@ def build_parser():
     p.add_argument("--model", help="设置学习模型")
 
     # status
+    p = sub.add_parser("stats", help="记忆统计分析")
+    p.add_argument("--format", choices=["text", "json"], default="text", help="输出格式")
     p = sub.add_parser("status", help="系统状态仪表盘")
 
     # vec
@@ -1442,6 +1491,7 @@ COMMAND_DISPATCH = {
     "load": cmd_load,
     "export": cmd_export,
     "config": cmd_config,
+    "stats": cmd_stats,
     "status": cmd_status,
     "entity": cmd_entity,
     "belief": cmd_belief,
