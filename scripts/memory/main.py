@@ -500,30 +500,65 @@ def release_lock():
 
 
 def _vec_rebuild(db):
-    """Rebuild vector index for active entries. Caller must ensure embed.is_available()."""
+    """Rebuild vector index for active entries.
+
+    Uses batch embedding when embed_batch_size > 1 and multiple rows exist;
+    falls back to per-item encoding otherwise.
+    """
     rows = db.execute(
         "SELECT seq, content, type, topics FROM entries WHERE deleted=0"
     ).fetchall()
     if not rows:
         return
+
+    # Load config to determine batch size
+    cfg = load_config()
+    batch_size = int(cfg.get("embed_batch_size", 32))
+
     count = 0
     failed = 0
-    for i, row in enumerate(rows):
-        text = "%s: %s %s" % (row["type"], row["content"], row["topics"])
-        try:
-            vec = embed.embed(text)
-            if not vec.any():
+
+    if embed.is_available() and batch_size > 1 and len(rows) > 1:
+        # Batch embedding path — faster for many entries
+        texts = []
+        seqs = []
+        for row in rows:
+            texts.append("%s: %s %s" % (row["type"], row["content"], row["topics"]))
+            seqs.append(row["seq"])
+
+        vectors = embed.embed_batch(texts, batch_size=batch_size)
+        for seq, vec in zip(seqs, vectors):
+            try:
+                if vec is not None and vec.any():
+                    db.execute(
+                        "INSERT OR REPLACE INTO entries_vec(seq, vector, model) VALUES(?, ?, ?)",
+                        (seq, vec.tobytes(), "bge-small-zh-v1.5"),
+                    )
+                    count += 1
+                else:
+                    failed += 1
+            except Exception:
                 failed += 1
-                continue  # skip zero vectors (embed failure)
-            db.execute(
-                "INSERT OR REPLACE INTO entries_vec(seq, vector, model) VALUES(?, ?, ?)",
-                (row["seq"], vec.tobytes(), "bge-small-zh-v1.5"),
-            )
-            count += 1
-        except Exception:
-            failed += 1
-            continue  # skip failed entries
+    else:
+        # Per-item path (original logic, used when batch disabled or model unavailable)
+        for row in rows:
+            text = "%s: %s %s" % (row["type"], row["content"], row["topics"])
+            try:
+                vec = embed.embed(text)
+                if not vec.any():
+                    failed += 1
+                    continue  # skip zero vectors (embed failure)
+                db.execute(
+                    "INSERT OR REPLACE INTO entries_vec(seq, vector, model) VALUES(?, ?, ?)",
+                    (row["seq"], vec.tobytes(), "bge-small-zh-v1.5"),
+                )
+                count += 1
+            except Exception:
+                failed += 1
+                continue  # skip failed entries
+
     db.commit()
+
     if count > 0:
         print(f"\u5411\u91cf\u7d22\u5f15\u5df2\u66f4\u65b0: {count} \u6761")
     elif failed > 0 and len(rows) == failed:

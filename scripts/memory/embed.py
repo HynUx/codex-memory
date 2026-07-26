@@ -12,6 +12,7 @@ Usage:
 
 import os
 import sys
+import time
 import numpy as np
 
 MODEL_NAME = "BAAI/bge-small-zh-v1.5"
@@ -56,22 +57,68 @@ def download_model():
 
 
 def embed(text):
-    """Convert text to a 512-dim L2-normalized float32 embedding vector.
+    """Convert text to a 512-dim L2-normalized float32 embedding vector with retry.
 
     Args:
         text: Input string to embed.
 
     Returns:
         numpy.ndarray of shape (512,), dtype float32, L2-normalized.
+        Returns zero vector if all retries fail.
+    """
+    model = _get_model()
+    last_exc = None
+    for attempt in range(3):
+        try:
+            vec = model.encode(text, normalize_embeddings=True)
+            result = vec.astype(np.float32)
+            if result.any():
+                return result
+            if attempt < 2:
+                time.sleep(1.0 * (2 ** attempt))
+                continue
+        except Exception as e:
+            last_exc = e
+            if attempt < 2:
+                time.sleep(1.0 * (2 ** attempt))
+                continue
+    import sys
+    print(f"⚠️ 向量编码失败 (3 次重试): {last_exc}", file=sys.stderr)
+    return np.zeros(512, dtype=np.float32)
+
+
+def embed_batch(texts, batch_size=32):
+    """Embed multiple texts in batch for better throughput.
+
+    Falls back to single-item embed() for any zero-vector result,
+    and for the entire batch if batch encoding fails completely.
+
+    Args:
+        texts: List of strings to embed.
+        batch_size: Batch size for model.encode(). Default 32.
+
+    Returns:
+        List[np.ndarray] of shape-(512,) float32 vectors, same order as input.
     """
     model = _get_model()
     try:
-        vec = model.encode(text, normalize_embeddings=True)
-        return vec.astype(np.float32)
+        vectors = model.encode(texts, batch_size=batch_size,
+                                normalize_embeddings=True, show_progress_bar=False)
+        vectors = vectors.astype(np.float32)
     except Exception as e:
         import sys
-        print(f'⚠️ 向量编码失败: {e}', file=sys.stderr)
-        return np.zeros(512, dtype=np.float32)
+        print(f"⚠️ 批量编码失败 ({len(texts)} 条): {e}，降级逐条编码", file=sys.stderr)
+        return [embed(t) for t in texts]
+
+    results = []
+    for i, vec in enumerate(vectors):
+        if not vec.any():
+            import sys
+            print(f"⚠️ 第 {i} 条批量嵌入为零向量，单条重试", file=sys.stderr)
+            results.append(embed(texts[i]))
+        else:
+            results.append(vec)
+    return results
 
 
 def cosine_similarity(a, b):

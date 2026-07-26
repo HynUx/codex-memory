@@ -7,6 +7,7 @@ DEFAULT_CONFIG = {
     "auto_evolve_threshold": 10,
     "stale_evolve_days": 7,
     "learner_model": "deepseek-v4-flash",
+    "embed_batch_size": 32,
 }
 
 
