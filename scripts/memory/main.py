@@ -358,23 +358,30 @@ def cmd_search(args):
     offset = getattr(args, "offset", 0)
     rows = []
 
-    # Layer 1: Vector semantic search (primary)
+    # Layer 1+2: Vector semantic + FTS5 keyword (parallel, merged)
+    seen = set()
+    rows = []
+
     if embed.is_available():
         vec_results = embed.vector_search(kw, db, limit)
         if vec_results:
-            # vec_results: list of (score, seq, type, content, topics)
-            rows = [(r[1], r[2], r[3], r[4]) for r in vec_results]
+            for r in vec_results:
+                if r[1] not in seen:
+                    rows.append((r[1], r[2], r[3], r[4]))
+                    seen.add(r[1])
 
-    # Layer 2: FTS5 keyword search (fallback)
-    if not rows:
-        fts_kw = seg.maybe_segment(kw)
-        rows = db.execute(
-            """SELECT e.seq, e.type, e.content, e.topics FROM entries_fts f
-               JOIN entries e ON f.rowid = e.seq
-               WHERE entries_fts MATCH ? AND e.deleted=0
-               ORDER BY rank LIMIT ? OFFSET ?""",
-            (fts_kw, limit, offset),
-        ).fetchall()
+    fts_kw = seg.maybe_segment(kw)
+    fts_rows = db.execute(
+        """SELECT e.seq, e.type, e.content, e.topics FROM entries_fts f
+           JOIN entries e ON f.rowid = e.seq
+           WHERE entries_fts MATCH ? AND e.deleted=0
+           ORDER BY rank LIMIT ? OFFSET ?""",
+        (fts_kw, limit, offset),
+    ).fetchall()
+    for row in fts_rows:
+        if row[0] not in seen:
+            rows.append(row)
+            seen.add(row[0])
 
     # Layer 3: LIKE substring (final fallback)
     if not rows:
