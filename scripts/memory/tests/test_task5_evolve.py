@@ -53,7 +53,7 @@ class TestEvolve(unittest.TestCase):
         old = sys.stdout
         sys.stdout = StringIO()
         try:
-            rc = mem.cmd_evolve(Namespace())
+            rc = mem.cmd_evolve(Namespace(force=True))
             out = sys.stdout.getvalue()
         finally:
             sys.stdout = old

@@ -337,7 +337,7 @@ def cmd_add(args):
                     return 0
                 finally:
                     lf.close()
-                cmd_evolve(None)
+                cmd_evolve(argparse.Namespace(force=True))
                 return 0
 
     db.close()
@@ -550,6 +550,26 @@ def cmd_evolve(args):
     acquire_lock()
     try:
         db = init_db()
+
+        # Threshold guard for CLI (not programmatic) calls:
+        # - CLI with --force: always evolve
+        # - CLI without --force: check threshold
+        # - Programmatic (args=None or force=True from auto-evolve): skip guard
+        if args is not None and not getattr(args, 'force', False):
+            cfg = load_config()
+            threshold = cfg.get("auto_evolve_threshold", 10)
+            unmerged = db.execute(
+                "SELECT count(*) FROM entries WHERE deleted=0 AND (consolidated_seq IS NULL OR correction_count>0)"
+            ).fetchone()[0]
+            if unmerged < threshold:
+                if unmerged == 0:
+                    print("没有需要进化的记录")
+                else:
+                    print(f"未合并记录不足（{unmerged}/{threshold}条），跳过进化")
+                db.close()
+                release_lock()
+                return 0
+
         V = int(db.execute(
             "SELECT value FROM system WHERE key='evolve_seq'"
         ).fetchone()["value"]) + 1
@@ -1167,6 +1187,7 @@ def build_parser():
 
     # evolve
     p = sub.add_parser("evolve", help="合并记忆到 project-context.md")
+    p.add_argument("--force", action="store_true", help="强制进化，忽略阈值检查")
 
     # load
     p = sub.add_parser("load", help="加载记忆上下文")

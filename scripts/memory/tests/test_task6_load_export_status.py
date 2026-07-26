@@ -118,7 +118,7 @@ class TestLoadExportStatus(unittest.TestCase):
         old = sys.stdout
         sys.stdout = StringIO()
         try:
-            mem.cmd_evolve(Namespace())
+            mem.cmd_evolve(Namespace(force=True))
         finally:
             sys.stdout = old
         rc, out = self._run(mem.cmd_status)

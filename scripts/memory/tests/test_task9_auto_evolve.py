@@ -13,6 +13,18 @@ from argparse import Namespace
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import main as mem
 import embed
+from io import StringIO
+
+
+def capture(fn):
+    """Run fn and return (rc, stdout_output)."""
+    old = sys.stdout
+    sys.stdout = StringIO()
+    try:
+        rc = fn()
+        return rc, sys.stdout.getvalue()
+    finally:
+        sys.stdout = old
 
 
 class TestAutoEvolve(unittest.TestCase):
@@ -134,6 +146,59 @@ class TestAutoEvolve(unittest.TestCase):
             ))
         self.assertTrue(os.path.exists(self._pc_path()),
                         "quoted true/3 should trigger evolve")
+
+
+
+
+class TestThresholdGuard(unittest.TestCase):
+    """Test that cmd_evolve respects threshold when called from CLI (not --force)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.test_dir = tempfile.mkdtemp(prefix="evolve_guard_")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.test_dir, ignore_errors=True)
+
+    def setUp(self):
+        mem.MEMORY_DIR = self.test_dir
+        mem.DB_PATH = os.path.join(self.test_dir, "memory.db")
+        embed.set_faiss_dir(self.test_dir)
+        mem.CONFIG_PATH = os.path.join(self.test_dir, "config.toml")
+        if os.path.exists(mem.DB_PATH):
+            os.remove(mem.DB_PATH)
+        self.db = mem.init_db()
+
+    def tearDown(self):
+        self.db.close()
+        if os.path.exists(mem.DB_PATH):
+            os.remove(mem.DB_PATH)
+
+    def _add(self, content):
+        mem.cmd_add(Namespace(type="tip", content=content, topics="[]", no_evolve=True))
+
+    def test_evolve_skips_below_threshold(self):
+        """CLI evolve (no --force) skips when unmerged < threshold."""
+        self._add("single entry")
+        rc, out = capture(lambda: mem.cmd_evolve(Namespace(force=False)))
+        self.assertEqual(rc, 0)
+        self.assertIn("不足", out)
+
+    def test_evolve_force_always_works(self):
+        """CLI evolve --force always evolves regardless of threshold."""
+        self._add("single entry")
+        rc, out = capture(lambda: mem.cmd_evolve(Namespace(force=True)))
+        self.assertEqual(rc, 0)
+        self.assertIn("进化完成", out)
+
+    def test_evolve_programmatic_skips_guard(self):
+        """Programmatic evolve (args=None) always evolves."""
+        self._add("single entry")
+        rc, out = capture(lambda: mem.cmd_evolve(None))
+        self.assertEqual(rc, 0)
+        self.assertIn("进化完成", out)
+
 
 if __name__ == "__main__":
     unittest.main()
