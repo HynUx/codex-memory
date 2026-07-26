@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "codex-memory"
 version = "0.1.0"
-description = "Persistent, evolving memory for AI agents — SQLite-backed, zero-dependency, auto-evolution"
+description = "Persistent, evolving memory for AI agents — SQLite-backed, minimal-dependency (stdlib core), auto-evolution"
 license = {text = "MIT"}
 readme = "README.md"
 requires-python = ">=3.10"
