@@ -969,6 +969,7 @@ def cmd_entity_add(args):
             (name, etype, values),
         )
         eid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.commit()
         print(f"✓ 实体已创建 (id={eid})")
     except sqlite3.IntegrityError:
         existing = db.execute(
