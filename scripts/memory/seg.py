@@ -14,6 +14,9 @@ Usage:
 
 import re
 import sys
+import warnings
+warnings.filterwarnings("ignore", message=".*pkg_resources.*", category=UserWarning)
+
 
 # Module-level cache for jieba availability
 _HAS_JIEBA = None
