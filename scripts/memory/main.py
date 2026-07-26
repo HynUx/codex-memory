@@ -328,15 +328,6 @@ def cmd_add(args):
             if unmerged >= threshold:
                 db.close()
                 print("触发自动进化...")
-                lf = open(LOCK_PATH, 'w')
-                try:
-                    fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    fcntl.flock(lf, fcntl.LOCK_UN)
-                except IOError:
-                    print("自动进化跳过（其他进程正在处理）")
-                    return 0
-                finally:
-                    lf.close()
                 cmd_evolve(argparse.Namespace(force=True))
                 return 0
 
