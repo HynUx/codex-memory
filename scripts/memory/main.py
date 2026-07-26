@@ -886,7 +886,46 @@ def cmd_vec(args):
     """Manage vector embeddings (BGE-small-zh via sentence-transformers)."""
     db = init_db()
     sub = getattr(args, "vec_cmd", "status")
-    if sub == "status":
+    if sub == "retry":
+        # Retry zero-vector entries only
+        if not embed.is_available():
+            print("✗ 需要安装 sentence-transformers")
+            db.close()
+            return 1
+        zero_rows = db.execute(
+            "SELECT seq, content, type, topics FROM entries e "
+            "JOIN entries_vec v ON e.seq = v.seq WHERE v.vector = zeroblob(2048)"
+        ).fetchall()
+        if not zero_rows:
+            print("✓ 没有零向量条目")
+            db.close()
+            return 0
+        fixed = 0
+        for row in zero_rows:
+            text = "%s: %s %s" % (row["type"], row["content"], row["topics"])
+            for attempt in range(3):
+                try:
+                    vec = embed.embed(text)
+                    if vec is not None and vec.any():
+                        db.execute(
+                            "UPDATE entries_vec SET vector = ? WHERE seq = ?",
+                            (vec.tobytes(), row["seq"]),
+                        )
+                        fixed += 1
+                        break
+                except Exception:
+                    if attempt < 2:
+                        time.sleep(1 * (2 ** attempt))
+        db.commit()
+        if fixed > 0:
+            print("✓ 已修复 %d/%d 条零向量" % (fixed, len(zero_rows)))
+            embed.delete_faiss_index()
+            embed.build_faiss_index(db)
+        else:
+            print("✗ 无法修复，%d 条仍为零向量" % len(zero_rows))
+        db.close()
+        return 0
+    elif sub == "status":
         cnt = db.execute("SELECT count(*) FROM entries_vec").fetchone()[0]
         total = db.execute("SELECT count(*) FROM entries WHERE deleted=0").fetchone()[0]
         avail = embed.is_available()
